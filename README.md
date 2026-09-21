@@ -17,6 +17,7 @@ Saasufy has no server-side code, so everything with an external side effect — 
 | Path | |
 | --- | --- |
 | `requirements.md` | Full MVP specification — data model, booking state machine, access control, open decisions |
+| `create-schema.py` | Creates/updates the nine Saasufy collections, indexes, views and access rules. Idempotent — safe to re-run, then deploy |
 | `.saasufy-api-key` | Saasufy admin credential (gitignored) |
 | `.saasufy-service-url` | Deployed Saasufy service endpoint |
 

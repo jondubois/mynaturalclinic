@@ -1,6 +1,6 @@
 # MyNaturalClinic — MVP Requirements
 
-**Status:** Draft v4 · 2026-09-22 — search keyed on an element-wise-indexed `multi` field; nine collections, no junction or derived tables
+**Status:** Draft v6 · 2026-09-22 — schema built, deployed and functionally verified on `sid8016`; range views use compound indexes with composite bounds (§6.4.8)
 **Product:** A marketplace where patients find natural therapists and clinicians by name, location, ailment/specialisation and availability, and book a paid online consultation.
 
 ---
@@ -376,7 +376,18 @@ Because phase 1 is now genuinely selective, **phase 2 no longer has to be cheap*
 
 **REQ-SEARCH-5 · Online-first ordering.** Consultations are video-only, so region is a *preference* (timezone, language, practitioner jurisdiction), not a hard requirement — topic-only search is expected to be the dominant query shape. The key set supports it directly, and the UI must not force a region before results are shown.
 
-**REQ-SEARCH-6 · Stage 2 — fetch that clinician's slots.** Each rendered card contains a nested `<collection-viewer>` over `TimeSlot`, using a compound index on `clinicianId, startAt` with `between` over the requested range: ~20 narrow indexed lookups per page, bounded by page size and independent of platform size. UI shape and index shape agree.
+**REQ-SEARCH-6 · Stage 2 — fetch that clinician's slots.** Each rendered card contains a nested `<collection-viewer>` over `TimeSlot` using `clinicianRangeView`: a `between` over the compound index `(clinicianId, startAt)`, where **both bounds bind both components of the key**:
+
+```
+transformIndex:                clinicianIdStartAt          // (clinicianId, startAt)
+transformIndexOperation:       between
+transformIndexOperationInputA: $paramFields.clinicianId,$paramFields.fromAt
+transformIndexOperationInputB: $paramFields.clinicianId,$paramFields.toAt
+```
+
+The date range is therefore resolved *in the index*, not by a phase-2 scan: the lookup walks only that clinician's slots inside the window. ~20 such lookups per result page, bounded by page size and independent of platform size. UI shape and index shape agree.
+
+> **The composite bound is the whole trick.** Supplying only the trailing component (`inputA: $paramFields.fromAt`) leaves the leading component unbound and the view returns **zero rows, silently**. Both inputs must name every component of the compound key, in index order — four parameter references across the two inputs for a two-field index. See §6.4.8.
 
 **REQ-SEARCH-7 · Date precision.** `nextAvailableAt` answers "has an opening before the end of your window", not "has an opening *inside* it", so a clinician free tomorrow but not during the month you asked about passes phase 1. Stage 2 resolves it exactly: a card whose nested slot viewer returns nothing is not rendered, and the frontend over-fetches stage 1 modestly to keep pages full.
 
@@ -410,16 +421,26 @@ This is the sparse-index property that would otherwise justify a dedicated searc
 
 Nine collections, eight indexes, no index-only collections.
 
-| Collection | Index | Fields | Serves |
-| --- | --- | --- | --- |
-| `Clinician` | `searchKeysIndex` | `searchKeys` (`multi`, element-wise) | Faceted search (stage 1) |
-| `Clinician` | `browseIndex` | `nextAvailableAt` | Unfiltered browse, "soonest" sort |
-| `Clinician` | `accountIndex` | `accountId` | Dashboard |
-| `TimeSlot` | `clinicianStartIndex` | `clinicianId, startAt` | Stage 2; clinician's own calendar |
-| `Appointment` | `patientStartIndex` | `patientAccountId, startAt` | Patient's appointments |
-| `Appointment` | `clinicianStartIndex` | `clinicianAccountId, startAt` | Clinician's appointments |
-| `Appointment` | `statusDueIndex` | `status, startAt` | Worker reconciliation sweeps (REQ-ARCH-8) |
-| `Email` | `statusIndex` | `status, createdAt` | Worker email queue drain |
+Saasufy names an index canonically after its fields, so index names below are the names it assigns. Views that need a range use a **compound** index with both key components bound in each bound (§6.4.8); the rest use `equals` on a single field.
+
+| Collection | Index | Serves |
+| --- | --- | --- |
+| `Clinician` | `searchKeys` (`multi`, element-wise) | Faceted search (stage 1) |
+| `Clinician` | `nextAvailableAt` | Unfiltered browse, "soonest" sort |
+| `Clinician` | `accountId` | Dashboard |
+| `TimeSlot` | `clinicianIdStartAt` (`clinicianId, startAt`) | Stage 2; clinician's own calendar |
+| `TimeSlot` | `appointmentId` | Booking lookups |
+| `Appointment` | `patientAccountIdStartAt` (`patientAccountId, startAt`) | Patient's appointments |
+| `Appointment` | `clinicianAccountIdStartAt` (`clinicianAccountId, startAt`) | Clinician's appointments |
+| `Appointment` | `statusStartAt` (`status, startAt`) | Worker reconciliation sweeps (REQ-ARCH-8) |
+| `Credential` | `clinicianId`, `reviewStatus` | Profile display; admin review queue |
+| `Availability` | `clinicianId` | Slot materialisation |
+| `Attendance` | `appointmentId` | Dispute lookups |
+| `Review` | `clinicianId`, `appointmentId` | Profile ratings |
+| `Email` | `status`, `dedupeKey` | Worker queue drain; send deduplication |
+| `Topic` | `slug`, `kind` | Vocabulary pickers |
+
+`statusStartAt` leads with a low-cardinality field, contrary to REQ-SEARCH-10, but the compound key rescues it: the worker's sweep binds a status *and* a time window, so it walks only the due records within that status rather than the whole bucket.
 
 **REQ-SEARCH-17 · Maintenance.** Two derived values need upkeep on `Clinician`: `searchKeys` and `nextAvailableAt`. The worker recomputes them whenever a slot is booked, cancelled, materialised or expires, and whenever listing eligibility, region or topics change. A topic or region edit rewrites the whole `searchKeys` array — it is replaced, never patched. Both are recomputable from `TimeSlot` + `Clinician` alone, and a `rebuild-search-fields` command must exist from day one. Two fields on an existing row is a far smaller consistency obligation than a derived collection, which is the main argument for this design — not the collection count.
 
@@ -431,16 +452,29 @@ Nine collections, eight indexes, no index-only collections.
 
 **REQ-SEARCH-21** All times are rendered in the **patient's** browser timezone, with the clinician's timezone shown alongside on the profile and confirmation screens.
 
-#### 6.4.7 Open technical questions — verify before building
+#### 6.4.7 Open technical questions
 
-Element-wise `multi` indexing is **confirmed available**, which settled the two largest questions: no compound-index semantics are relied upon, and no junction collection is needed.
+Element-wise `multi` indexing and the `equals` + phase-2-range pattern are **both verified against the deployed service** (§6.4.8). What remains:
 
 | # | To verify | Fallback |
 | --- | --- | --- |
-| V-1 | Practical `maxCardinality` ceiling for a single `searchKeys` value in a dense region+topic bucket | Subdivide to city-level keys (REQ-SEARCH-8) — already the planned escape hatch |
+| V-1 | Practical `maxCardinality` ceiling for one `searchKeys` value in a dense region+topic bucket | Subdivide to city-level keys (REQ-SEARCH-8) — already the planned escape hatch |
 | V-2 | Whether `$paramFields` in `transformOrderByField` permits a client-chosen sort direction | Define one view per sort option |
-| V-3 | Write cost of replacing a 17-element indexed `multi` array on every profile edit, and whether it is cheap enough to do inline rather than batched | Debounce `searchKeys` rebuilds; the 60-second consistency window of REQ-PROF-3 already permits this |
+| V-3 | Write cost of replacing a 17-element indexed `multi` array on every profile edit | Debounce rebuilds; the 60-second window of REQ-PROF-3 already permits it |
+| V-4 | Whether the worker's service credential can read fields marked `accessRead: block` (the Pin/Zoom/meeting tokens). If it cannot, those fields must relax to `restrict` and the tokens be held outside Saasufy | Hold tokens only in the worker's own store and keep Saasufy free of them |
 
+#### 6.4.8 Verified Saasufy behaviour
+
+Established empirically against `sid8016` while building the schema. These are platform facts, not preferences, and each one invalidated an earlier assumption in this document:
+
+1. **`multi` fields are indexed element-wise.** A single `equals` lookup on one element of `searchKeys` returns exactly the rows containing it. This is the foundation of §6.4.2 and it works.
+2. **`multi` values are comma-separated strings over the HTTP API**, not JSON arrays. Posting an array is rejected with *"Value must be a string"*. Keys must therefore never contain a comma — the `|` separator in `au-nsw|naturopathy` is deliberate.
+3. **Compound-index `between` works, but both bounds must bind every component of the key.** For an index `(clinicianId, startAt)` the inputs are `$paramFields.clinicianId,$paramFields.fromAt` and `$paramFields.clinicianId,$paramFields.toAt` — the leading component is repeated in both bounds, giving four parameter references for a two-field index. Supplying only the trailing component leaves the leading one unbound and the view returns **zero rows with no error**, which is the single easiest way to build a silently dead view on this platform.
+4. **`between` is half-open: `[fromAt, toAt)`.** The lower bound is inclusive, the upper exclusive — verified at millisecond granularity. A window built as "midnight to midnight" therefore drops a record landing exactly on the closing instant; callers must pass `toAt = end + 1` to include it. Every date-range caller in the worker and frontend must apply this consistently.
+5. **A `paramField` that matches a field name does not filter by itself.** It must be consumed by an index input or appear in the phase-2 query, or it is silently ignored — the failure mode is *too many* rows, not an error. A `startAt`-only `between` with `clinicianId` merely declared as a param returns every clinician's slots.
+6. **Saasufy renames index records canonically after their fields** (`clinicianStartIndex` → `clinicianIdStartAt`) on deploy, and auto-creates an index for any field a view references. A view pointing at a custom index name is therefore left dangling after deployment, and Saasufy will create a placeholder index over a **nonexistent field** to satisfy it — which silently indexes nothing. Always name indexes after their fields.
+7. **Listing endpoints paginate at 10 by default.** Any tooling that enumerates fields, indexes or views must page, or it will silently operate on a partial schema.
+8. **An empty `multi` field matches no `equals` lookup**, which is what makes the sparse-index trick of REQ-SEARCH-9 work: unlisted clinicians carry an empty `searchKeys` and are invisible to every search.
 
 ### 6.5 Booking and payment
 
