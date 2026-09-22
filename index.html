@@ -129,6 +129,35 @@
     padding:12px 14px;font-size:.87rem;margin-bottom:14px}
   .spin{text-align:center;color:var(--muted);padding:22px;font-size:.9rem}
 
+  /* ---- confirm-modal ----------------------------------------------------
+     confirm-modal renders an <overlay-modal> into its own LIGHT dom, so the
+     slotted content below is styleable with ordinary selectors. The dialog
+     chrome lives in overlay-modal's shadow DOM and is reached via ::part().
+     Defaults we are overriding: an 800px dialog and an orange (#e37042)
+     title bar, neither of which matches this design. */
+  confirm-modal{--modal-width:440px}
+  overlay-modal::part(overlay-background){background:rgba(35,40,46,.45)}
+  overlay-modal::part(dialog){
+    border:1px solid var(--border);border-radius:var(--radius);
+    box-shadow:0 16px 40px rgba(0,0,0,.18);overflow:hidden}
+  overlay-modal::part(title-bar){
+    background:var(--surface);color:var(--text);font-weight:650;
+    border-bottom:1px solid var(--border);padding:14px 18px}
+  overlay-modal::part(content){padding:18px}
+  overlay-modal::part(footer){display:none}   /* confirm-modal puts its buttons in content */
+  .confirm-modal-content > div:first-child{color:var(--muted);margin-bottom:18px}
+  .confirm-modal-buttons-container{display:flex;gap:10px;justify-content:flex-end}
+  .modal-confirm-button,.modal-cancel-button{
+    font:inherit;font-weight:550;border-radius:8px;padding:9px 16px;cursor:pointer;width:auto}
+  .modal-confirm-button{background:var(--danger);color:#fff;border:1px solid var(--danger)}
+  .modal-confirm-button:hover{background:#862b2b}
+  .modal-cancel-button{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+  .modal-cancel-button:hover{background:#f4f2ee}
+  @media(max-width:480px){
+    .confirm-modal-buttons-container{flex-direction:column-reverse}
+    .modal-confirm-button,.modal-cancel-button{width:100%}
+  }
+
   .hero{padding:44px 0 26px}
   .hero h1{font-size:2.3rem;max-width:18ch}
   .hero p{max-width:56ch;color:var(--muted);font-size:1.03rem}
@@ -751,7 +780,7 @@
             <template slot="loader"><div class="spin">Loading…</div></template>
             <template slot="error"><div class="err">{{$Cred.error.message}}</div></template>
             <div slot="viewport"></div>
-            <confirm-modal slot="modal" title="Remove credential" message="" confirm-button-label="Remove"></confirm-modal>
+            <confirm-modal slot="modal" heading="Remove credential" message="" confirm-button-label="Remove" cancel-button-label="Cancel" auto-focus="cancel"></confirm-modal>
           </collection-viewer>
         </div>
 
@@ -867,7 +896,7 @@
             <template slot="loader"><div class="spin">Loading…</div></template>
             <template slot="error"><div class="err">Could not load availability: {{$Availability.error.message}}</div></template>
             <div slot="viewport"></div>
-            <confirm-modal slot="modal" title="Remove availability" message="" confirm-button-label="Remove"></confirm-modal>
+            <confirm-modal slot="modal" heading="Remove availability" message="" confirm-button-label="Remove" cancel-button-label="Cancel" auto-focus="cancel"></confirm-modal>
           </collection-viewer>
         </div>
 
