@@ -215,6 +215,11 @@ views(m, [
      'transformIndex': 'clinicianId', 'transformIndexOperation': 'equals',
      'transformIndexOperationInputA': '$paramFields.clinicianId',
      'transformOrderByField': 'yearAwarded', 'transformOrderByDesc': True},
+    {'name': 'accountView', 'paramFields': 'accountId', 'primaryFields': 'accountId',
+     'transformIndex': 'accountId', 'transformIndexOperation': 'equals',
+     'transformIndexOperationInputA': '$paramFields.accountId',
+     'transformOrderByField': 'createdAt', 'transformOrderByDesc': True,
+     'affectingFields': 'reviewStatus,reviewNote'},
     {'name': 'reviewQueueView', 'paramFields': 'reviewStatus', 'primaryFields': 'reviewStatus',
      'transformIndex': 'reviewStatus', 'transformIndexOperation': 'equals',
      'transformIndexOperationInputA': '$paramFields.reviewStatus',
@@ -241,12 +246,17 @@ fields(m, 'Availability', [
     {'name': 'effectiveUntil', 'type': N},
     {'name': 'active', 'type': B, 'defaultValue': 'true'},
 ])
-indexes(m, [{'name': 'clinicianId', 'fields': 'clinicianId'}])
+indexes(m, [{'name': 'clinicianId', 'fields': 'clinicianId'},
+            {'name': 'accountId', 'fields': 'accountId'}])
 views(m, [
     {'name': 'clinicianView', 'paramFields': 'clinicianId', 'primaryFields': 'clinicianId',
      'transformIndex': 'clinicianId', 'transformIndexOperation': 'equals',
      'transformIndexOperationInputA': '$paramFields.clinicianId',
      'transformOrderByField': 'dayOfWeek'},
+    {'name': 'accountView', 'paramFields': 'accountId', 'primaryFields': 'accountId',
+     'transformIndex': 'accountId', 'transformIndexOperation': 'equals',
+     'transformIndexOperationInputA': '$paramFields.accountId',
+     'transformOrderByField': 'dayOfWeek', 'affectingFields': 'kind,startMinute,endMinute'},
 ])
 
 print('== TimeSlot ==')

@@ -1,0 +1,1117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyNaturalClinic</title>
+
+<!-- Saasufy components -->
+<script src="https://saasufy.com/node_modules/saasufy-components/socket.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/app-router.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/collection-viewer.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/collection-adder-form.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/collection-deleter.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/model-viewer.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/model-input.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/model-text.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/input-provider.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/if-group.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/switch-group.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/render-group.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/confirm-modal.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/oauth-link.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/oauth-handler.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/log-out.js" type="module" defer></script>
+
+<style>
+  :root{
+    --bg:#fbfaf8; --surface:#fff; --text:#23282e; --muted:#6f7680;
+    --border:#e6e3de; --accent:#2f6b4f; --accent-soft:#eef4f0;
+    --warn:#8a6d1f; --warn-soft:#fdf6e3; --danger:#9b3232; --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  h1,h2,h3{line-height:1.25;margin:0 0 .5rem}
+  h1{font-size:1.9rem;letter-spacing:-.01em}
+  h2{font-size:1.25rem}
+  h3{font-size:1rem}
+  p{margin:0 0 1rem}
+  .wrap{max-width:940px;margin:0 auto;padding:0 20px}
+  .muted{color:var(--muted)}
+  .small{font-size:.86rem}
+
+  /* header */
+  header.site{background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:20}
+  header.site .wrap{display:flex;align-items:center;gap:22px;height:60px;flex-wrap:wrap}
+  .brand{font-weight:650;font-size:1.05rem;color:var(--text);letter-spacing:-.01em}
+  .brand span{color:var(--accent)}
+  nav.main{display:flex;gap:18px;margin-left:auto;flex-wrap:wrap}
+  nav.main a{color:var(--muted);font-size:.9rem}
+  nav.main a:hover{color:var(--accent);text-decoration:none}
+
+  /* dev banner */
+  .devbar{background:var(--warn-soft);border-bottom:1px solid #eadfbc;color:var(--warn);
+    font-size:.82rem;padding:7px 0}
+  .devbar code{background:rgba(0,0,0,.05);padding:1px 5px;border-radius:4px;font-size:.95em}
+
+  main{padding:28px 0 70px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+    padding:20px;margin-bottom:16px}
+  .card h2{margin-bottom:.15rem}
+  .card .sub{color:var(--muted);font-size:.88rem;margin-bottom:1rem}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:620px){.grid2{grid-template-columns:1fr}}
+
+  label.f{display:block;margin-bottom:14px}
+  label.f > .lab{display:block;font-size:.82rem;font-weight:600;color:var(--muted);
+    margin-bottom:5px;letter-spacing:.01em}
+  label.f > .hint{display:block;font-size:.78rem;color:var(--muted);margin-top:4px}
+
+  input,select,textarea{width:100%;font:inherit;color:inherit;background:var(--surface);
+    border:1px solid var(--border);border-radius:8px;padding:9px 11px}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+  textarea{min-height:120px;resize:vertical}
+  model-input,input-provider{display:block}
+  model-input input,model-input textarea,model-input select,
+  input-provider input,input-provider select{width:100%;font:inherit;color:inherit;
+    background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 11px}
+  model-input.error input{border-color:var(--danger)}
+
+  /* oauth-link and friends are custom elements (display:inline by default) that wrap a
+     block-level viewport div; leaving them inline breaks button alignment. */
+  oauth-link,log-out{display:inline-block}
+  oauth-link > [slot=viewport]{display:inline-block}
+  .btn-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .btn-row > *{margin:0}
+
+  .btn{display:inline-block;background:var(--accent);color:#fff;border:1px solid var(--accent);
+    border-radius:8px;padding:9px 16px;font:inherit;font-weight:550;cursor:pointer;width:auto}
+  .btn:hover{background:#28593f;text-decoration:none;color:#fff}
+  .btn.sec{background:var(--surface);color:var(--text);border-color:var(--border)}
+  .btn.sec:hover{background:#f4f2ee;color:var(--text)}
+  input[type=submit]{width:auto}
+
+  .pill{display:inline-block;font-size:.74rem;font-weight:600;padding:2px 9px;border-radius:99px;
+    border:1px solid var(--border);color:var(--muted);background:var(--surface)}
+  .pill.ok{color:var(--accent);background:var(--accent-soft);border-color:#cfe2d6}
+  .pill.pend{color:var(--warn);background:var(--warn-soft);border-color:#eadfbc}
+  .pill.no{color:var(--danger);background:#fbeded;border-color:#f0d5d5}
+
+  /* checklist */
+  ul.check{list-style:none;padding:0;margin:0}
+  ul.check li{display:flex;gap:13px;align-items:flex-start;padding:13px 0;border-top:1px solid var(--border)}
+  ul.check li:first-child{border-top:0}
+  .mark{flex:0 0 22px;height:22px;border-radius:50%;display:grid;place-items:center;
+    font-size:.72rem;font-weight:700;margin-top:1px}
+  .mark.done{background:var(--accent);color:#fff}
+  .mark.todo{background:#efedea;color:var(--muted);border:1px solid var(--border)}
+  .ck-body{flex:1}
+  .ck-body .t{font-weight:600}
+  .ck-body .d{color:var(--muted);font-size:.86rem}
+
+  /* lists */
+  .row{display:flex;gap:14px;align-items:flex-start;padding:14px 0;border-top:1px solid var(--border)}
+  .row:first-child{border-top:0}
+  .row .grow{flex:1;min-width:0}
+  .row .t{font-weight:600}
+  .row .d{color:var(--muted);font-size:.86rem}
+  collection-deleter{cursor:pointer;color:var(--muted);font-size:1rem;padding:2px 6px;border-radius:6px}
+  collection-deleter:hover{color:var(--danger);background:#fbeded}
+
+  .empty{color:var(--muted);text-align:center;padding:26px 0;font-size:.9rem}
+  .err{color:var(--danger);background:#fbeded;border:1px solid #f0d5d5;border-radius:8px;
+    padding:10px 12px;font-size:.86rem;margin-bottom:12px}
+  .note{background:var(--accent-soft);border:1px solid #cfe2d6;border-radius:8px;
+    padding:12px 14px;font-size:.87rem;margin-bottom:14px}
+  .spin{text-align:center;color:var(--muted);padding:22px;font-size:.9rem}
+
+  .hero{padding:44px 0 26px}
+  .hero h1{font-size:2.3rem;max-width:18ch}
+  .hero p{max-width:56ch;color:var(--muted);font-size:1.03rem}
+  .steps{counter-reset:s;list-style:none;padding:0;margin:0}
+  .steps li{counter-increment:s;display:flex;gap:14px;padding:11px 0}
+  .steps li::before{content:counter(s);flex:0 0 26px;height:26px;border-radius:50%;
+    background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;
+    font-weight:700;font-size:.8rem}
+  table.plain{width:100%;border-collapse:collapse;font-size:.9rem}
+  table.plain th,table.plain td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--border)}
+  table.plain th{color:var(--muted);font-weight:600;font-size:.8rem}
+  .sechead{display:flex;align-items:baseline;gap:12px;margin:26px 0 10px}
+  .sechead h2{margin:0}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .toolbar > *{flex:1;min-width:150px}
+</style>
+</head>
+<body>
+
+<!-- ===================================================================
+     DEV NOTE
+     There is no Keycloak / OAuth wired up yet, so the browser socket is
+     unauthenticated. Saasufy therefore allows reads of models whose
+     accessRead is "allow" (Clinician, Topic, Credential, Review) and
+     refuses everything else.
+
+     DEV_ACCOUNT_ID below is the account associated with the HTTP API
+     credential (see .saasufy-dev-account). Seed data is owned by it.
+     When Keycloak lands, every occurrence is replaced by
+       {{socket.authToken ? socket.authToken.accountId : ''}}
+     and nothing else about these pages needs to change.
+     =================================================================== -->
+
+<!-- Keycloak redirects back to the bare page URL with ?code=...&state=... and no
+     fragment, so route to the callback page before app-router first renders. -->
+<script>
+  (function () {
+    var q = new URLSearchParams(location.search);
+    if (q.has('code') && q.has('state')) location.hash = '/auth/callback';
+  })();
+</script>
+
+<socket-provider url="wss://saasufy.com/sid8016/socketcluster/">
+
+  <header class="site">
+    <div class="wrap">
+      <a class="brand" href="#/">My<span>Natural</span>Clinic</a>
+      <nav class="main">
+        <a href="#/">Home</a>
+        <a href="#/browse">Browse</a>
+        <if-group show-content="{{!socket.authToken}}">
+          <template slot="content"><a href="#/clinician">For clinicians</a></template>
+          <div slot="viewport"></div>
+        </if-group>
+        <if-group show-content="{{!!socket.authToken}}">
+          <template slot="content"><a href="#/clinician">Dashboard</a></template>
+          <div slot="viewport"></div>
+        </if-group>
+        <a href="#/admin/reviews">Admin</a>
+        <if-group show-content="{{!!socket.authToken}}">
+          <template slot="content">
+            <log-out onclick="logOut()"><a href="javascript:void(0)">Log out</a></log-out>
+          </template>
+          <div slot="viewport"></div>
+        </if-group>
+      </nav>
+    </div>
+  </header>
+
+  <div class="devbar">
+    <div class="wrap">
+      <if-group show-content="{{!socket.authToken}}">
+        <template slot="content">
+          Not signed in — public pages only.
+          <a href="#/clinician">Sign up or log in</a> to manage a practitioner profile.
+        </template>
+        <div slot="viewport"></div>
+      </if-group>
+      <if-group show-content="{{!!socket.authToken}}">
+        <template slot="content">
+          Signed in as <code>{{socket.authToken.accountId}}</code>.
+        </template>
+        <div slot="viewport"></div>
+      </if-group>
+    </div>
+  </div>
+
+  <main>
+  <app-router default-page="/" auto-reset-window-scroll>
+
+    <!-- ============================ HOME ============================ -->
+    <template slot="page" route-path="/">
+      <div class="wrap">
+        <div class="hero">
+          <h1>Online consultations with qualified natural therapists</h1>
+          <p>Search practitioners by what you need help with, where they are, and when
+             they are actually free — then book and meet online.</p>
+          <p style="margin-top:20px">
+            <a class="btn" href="#/clinician">Join as a practitioner</a>
+            <a class="btn sec" href="#/browse" style="margin-left:8px">Browse practitioners</a>
+          </p>
+        </div>
+
+        <div class="card">
+          <h2>Recently listed</h2>
+          <div class="sub">Reads <code>Clinician.browseView</code>, ordered by soonest availability.</div>
+          <collection-viewer
+            collection-type="Clinician"
+            collection-fields="displayName,professionalTitle,city,region,priceAmount,listingStatus"
+            collection-view="browseView"
+            collection-view-params="query="
+            collection-view-primary-fields=""
+            collection-page-size="5"
+          >
+            <template slot="item">
+              <div class="row">
+                <div class="grow">
+                  <div class="t">{{Clinician.displayName}}</div>
+                  <div class="d">{{Clinician.professionalTitle}} · {{Clinician.city}}</div>
+                </div>
+                <div class="small muted">${{Clinician.priceAmount / 100}}</div>
+              </div>
+            </template>
+            <template slot="no-item">
+              <div class="empty">No clinicians are listed yet. A profile appears here once it is approved.</div>
+            </template>
+            <template slot="loader"><div class="spin">Loading…</div></template>
+            <template slot="error"><div class="err">Could not load clinicians: {{$Clinician.error.message}}</div></template>
+            <div slot="viewport"></div>
+          </collection-viewer>
+        </div>
+      </div>
+    </template>
+
+    <!-- ============================ BROWSE ============================ -->
+    <template slot="page" route-path="/browse">
+      <div class="wrap">
+        <h1>Practitioners</h1>
+        <p class="muted">Patient-facing search arrives with the patient flow. This page previews
+           the same <code>searchView</code> the search will use.</p>
+
+        <div class="card">
+          <div class="toolbar">
+            <input-provider
+              type="select"
+              options="au-nsw,au-vic,au-qld,naturopathy,nutrition,acupuncture,au-nsw|naturopathy"
+              value="au-nsw"
+              consumers=".search-results:collection-view-params"
+              provider-template="searchKey={{value}},query=,sortBy=nextAvailableAt"
+            ></input-provider>
+          </div>
+          <div class="small muted" style="margin-bottom:10px">
+            Each option is one element of the indexed <code>searchKeys</code> array — region,
+            topic, or a region|topic composite.
+          </div>
+
+          <collection-viewer
+            class="search-results"
+            collection-type="Clinician"
+            collection-fields="displayName,professionalTitle,city,priceAmount,consultationMinutes"
+            collection-view="searchView"
+            collection-view-params="searchKey=au-nsw,query=,sortBy=nextAvailableAt"
+            collection-view-primary-fields="searchKey"
+            collection-page-size="10"
+            auto-reset-page-offset
+          >
+            <template slot="item">
+              <div class="row">
+                <div class="grow">
+                  <div class="t"><a href="#/p/{{Clinician.id}}">{{Clinician.displayName}}</a></div>
+                  <div class="d">{{Clinician.professionalTitle}} · {{Clinician.city}}</div>
+                </div>
+                <div class="small muted">${{Clinician.priceAmount / 100}} / {{Clinician.consultationMinutes}} min</div>
+              </div>
+            </template>
+            <template slot="no-item">
+              <div class="empty">No listed practitioners match that key yet.<br>
+                <span class="small">Only clinicians with <code>listingStatus = listed</code> carry search keys.</span></div>
+            </template>
+            <template slot="loader"><div class="spin">Searching…</div></template>
+            <template slot="error"><div class="err">{{$Clinician.error.message}}</div></template>
+            <div slot="viewport"></div>
+          </collection-viewer>
+        </div>
+      </div>
+    </template>
+
+    <!-- ============================ PUBLIC PROFILE ============================ -->
+    <template slot="page" route-path="/p/:clinicianId">
+      <div class="wrap">
+        <model-viewer
+          model-type="Clinician"
+          model-id="{{clinicianId}}"
+          model-fields="displayName,professionalTitle,bio,city,region,country,timezone,priceAmount,consultationMinutes,languages,topics,ratingAverage,ratingCount,listingStatus"
+        >
+          <template slot="item">
+            <h1>{{Clinician.displayName}}</h1>
+            <p class="muted">{{Clinician.professionalTitle}} · {{Clinician.city}}, {{Clinician.region}}</p>
+            <div class="card">
+              <h2>About</h2>
+              <p>{{Clinician.bio}}</p>
+              <table class="plain">
+                <tr><th>Consultation</th><td>{{Clinician.consultationMinutes}} minutes, online</td></tr>
+                <tr><th>Fee</th><td>${{Clinician.priceAmount / 100}} AUD</td></tr>
+                <tr><th>Languages</th><td>{{Clinician.languages}}</td></tr>
+                <tr><th>Focus areas</th><td>{{Clinician.topics}}</td></tr>
+                <tr><th>Timezone</th><td>{{Clinician.timezone}}</td></tr>
+              </table>
+            </div>
+            <div class="card">
+              <h2>Qualifications</h2>
+              <div class="sub">Only approved credentials are shown publicly.</div>
+              <collection-viewer
+                collection-type="Credential"
+                type-alias="Cred"
+                collection-fields="type,institution,qualificationName,yearAwarded,reviewStatus"
+                collection-view="clinicianView"
+                collection-view-params="clinicianId={{Clinician.id}}"
+                collection-view-primary-fields="clinicianId"
+                collection-page-size="20"
+              >
+                <template slot="item">
+                  <if-group show-content="{{Cred.reviewStatus === 'approved'}}">
+                    <template slot="content">
+                      <div class="row">
+                        <div class="grow">
+                          <div class="t">{{Cred.qualificationName}}</div>
+                          <div class="d">{{Cred.institution}} · {{Cred.yearAwarded}}</div>
+                        </div>
+                        <span class="pill ok">verified</span>
+                      </div>
+                    </template>
+                    <div slot="viewport"></div>
+                  </if-group>
+                </template>
+                <template slot="no-item"><div class="empty">No qualifications listed.</div></template>
+                <template slot="error"><div class="err">{{$Cred.error.message}}</div></template>
+                <div slot="viewport"></div>
+              </collection-viewer>
+            </div>
+            <div class="card">
+              <h2>Book a consultation</h2>
+              <p class="muted small">Booking arrives with the patient flow.</p>
+              <button class="btn" disabled>Choose a time</button>
+            </div>
+          </template>
+          <div slot="viewport"></div>
+        </model-viewer>
+      </div>
+    </template>
+
+    <!-- ================== CLINICIAN DASHBOARD (signed out = join) ================== -->
+    <template slot="page" route-path="/clinician" auto-reset-window-scroll>
+      <div class="wrap">
+
+        <!-- Signed out: what this is and how to join. -->
+        <if-group show-content="{{!socket.authToken}}">
+          <template slot="content">
+            <h1>Join as a practitioner</h1>
+                    <p class="muted" style="max-width:60ch">We verify every practitioner before they appear in
+                      search results. Expect the process to take a few days, mostly waiting on credential review.</p>
+
+                    <div class="card">
+                      <h2>How it works</h2>
+                      <ol class="steps">
+                        <li><div><div class="t">Create your account</div>
+                          <div class="d muted">Email sign-up and verification, handled by our identity provider.</div></div></li>
+                        <li><div><div class="t">Complete your profile</div>
+                          <div class="d muted">Your name, focus areas, location, fee and a biography patients will read.</div></div></li>
+                        <li><div><div class="t">Submit your credentials</div>
+                          <div class="d muted">Degrees, registrations and certifications, with supporting documents.</div></div></li>
+                        <li><div><div class="t">Add your payout details</div>
+                          <div class="d muted">Where we send your share after each completed consultation.</div></div></li>
+                        <li><div><div class="t">Publish your availability</div>
+                          <div class="d muted">A weekly pattern plus any days off. Patients book against it.</div></div></li>
+                      </ol>
+                    </div>
+
+            <div class="card">
+              <h2>Create your account</h2>
+              <p class="muted small">Email sign-up through the shared Saasufy Keycloak instance. You
+                 will be asked to verify your email address before your profile can be reviewed.</p>
+              <div class="btn-row">
+                            <oauth-link
+                              provider="keycloak"
+                              client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+                              redirect-uri="http://localhost:8100/index.html"
+                              grant-type="authorization_code"
+                            >
+                              <template slot="item">
+                                <a class="btn" href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}&amp;prompt=create">
+                                  Sign up with email
+                                </a>
+                              </template>
+                              <div slot="viewport"></div>
+                            </oauth-link>
+
+                            <oauth-link
+                              provider="keycloak"
+                              client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+                              redirect-uri="http://localhost:8100/index.html"
+                              grant-type="authorization_code"
+                            >
+                              <template slot="item">
+                                <a class="btn sec" href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}">
+                                  I already have an account
+                                </a>
+                              </template>
+                              <div slot="viewport"></div>
+                            </oauth-link>
+                            </div>
+            </div>
+          </template>
+          <div slot="viewport"></div>
+        </if-group>
+
+        <!-- Signed in: the onboarding dashboard. -->
+        <if-group show-content="{{!!socket.authToken}}">
+          <template slot="content">
+                    <h1>Your onboarding</h1>
+                    <p class="muted">Everything below must be complete before your profile appears in patient search.</p>
+
+                    <collection-viewer
+                      collection-type="Clinician"
+                      collection-fields="accountId"
+                      collection-view="accountView"
+                      collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
+                      collection-view-primary-fields="accountId"
+                      collection-page-size="1"
+                    >
+                      <template slot="item">
+                        <model-viewer
+                          model-type="Clinician"
+                          model-id="{{Clinician.id}}"
+                          model-fields="displayName,professionalTitle,bio,topics,country,region,city,timezone,priceAmount,consultationMinutes,listingStatus,emailVerified,payoutStatus,nextAvailableAt"
+                          type-alias="C"
+                        >
+                          <template slot="item">
+                            <div class="card">
+                              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+                                <h2 style="margin:0">{{C.displayName}}</h2>
+                                <switch-group show-cases="draft={{C.listingStatus === 'draft'}},review={{C.listingStatus === 'pending_review'}},listed={{C.listingStatus === 'listed'}},susp={{C.listingStatus === 'suspended'}}">
+                                  <template slot="content" name="draft"><span class="pill">draft</span></template>
+                                  <template slot="content" name="review"><span class="pill pend">in review</span></template>
+                                  <template slot="content" name="listed"><span class="pill ok">listed</span></template>
+                                  <template slot="content" name="susp"><span class="pill no">suspended</span></template>
+                                  <div slot="viewport"></div>
+                                </switch-group>
+                              </div>
+                              <div class="sub">{{C.professionalTitle}}</div>
+
+                              <ul class="check">
+                                <li>
+                                  <switch-group show-cases="y={{!!C.emailVerified}},n={{!C.emailVerified}}">
+                                    <template slot="content" name="y"><div class="mark done">&#10003;</div></template>
+                                    <template slot="content" name="n"><div class="mark todo">1</div></template>
+                                    <div slot="viewport"></div>
+                                  </switch-group>
+                                  <div class="ck-body">
+                                    <div class="t">Verify your email address</div>
+                                    <div class="d">Handled by the identity provider at sign-up.</div>
+                                  </div>
+                                </li>
+                                <li>
+                                  <switch-group show-cases="y={{!!C.bio && C.bio.length >= 200 && !!C.displayName && !!C.priceAmount}},n={{!(C.bio && C.bio.length >= 200 && C.displayName && C.priceAmount)}}">
+                                    <template slot="content" name="y"><div class="mark done">&#10003;</div></template>
+                                    <template slot="content" name="n"><div class="mark todo">2</div></template>
+                                    <div slot="viewport"></div>
+                                  </switch-group>
+                                  <div class="ck-body">
+                                    <div class="t"><a href="#/clinician/profile">Complete your profile</a></div>
+                                    <div class="d">Name, title, focus areas, location, fee and a biography of at least 200 characters.</div>
+                                  </div>
+                                </li>
+                                <li>
+                                  <div class="mark todo">3</div>
+                                  <div class="ck-body">
+                                    <div class="t"><a href="#/clinician/credentials">Submit your credentials</a></div>
+                                    <div class="d">At least one approved qualification is required.</div>
+                                  </div>
+                                </li>
+                                <li>
+                                  <switch-group show-cases="y={{C.payoutStatus === 'active'}},n={{C.payoutStatus !== 'active'}}">
+                                    <template slot="content" name="y"><div class="mark done">&#10003;</div></template>
+                                    <template slot="content" name="n"><div class="mark todo">4</div></template>
+                                    <div slot="viewport"></div>
+                                  </switch-group>
+                                  <div class="ck-body">
+                                    <div class="t"><a href="#/clinician/payouts">Add payout details</a></div>
+                                    <div class="d">Status: {{C.payoutStatus}}</div>
+                                  </div>
+                                </li>
+                                <li>
+                                  <switch-group show-cases="y={{C.nextAvailableAt > 0}},n={{!(C.nextAvailableAt > 0)}}">
+                                    <template slot="content" name="y"><div class="mark done">&#10003;</div></template>
+                                    <template slot="content" name="n"><div class="mark todo">5</div></template>
+                                    <div slot="viewport"></div>
+                                  </switch-group>
+                                  <div class="ck-body">
+                                    <div class="t"><a href="#/clinician/availability">Publish your availability</a></div>
+                                    <div class="d">A weekly pattern the booking system turns into bookable times.</div>
+                                  </div>
+                                </li>
+                              </ul>
+                            </div>
+
+                            <div class="card">
+                              <h2>Quick links</h2>
+                              <p style="margin:0">
+                                <a class="btn sec" href="#/clinician/profile">Profile</a>
+                                <a class="btn sec" href="#/clinician/credentials">Credentials</a>
+                                <a class="btn sec" href="#/clinician/availability">Availability</a>
+                                <a class="btn sec" href="#/clinician/payouts">Payouts</a>
+                                <a class="btn sec" href="#/p/{{C.id}}">Public preview</a>
+                              </p>
+                            </div>
+                          </template>
+                          <div slot="viewport"></div>
+                        </model-viewer>
+                      </template>
+
+                      <template slot="no-item">
+                        <div class="card">
+                          <h2>No practitioner profile yet</h2>
+                          <p class="muted">Nothing is associated with this account. Create the profile to begin.</p>
+                          <collection-adder-form
+                            collection-type="Clinician"
+                            model-values="accountId={{socket.authToken ? socket.authToken.accountId : ''}},listingStatus=draft,priceCurrency=AUD"
+                            computable-model-values
+                            success-message="Profile created."
+                            trim-spaces
+                            show-field-errors
+                          >
+                            <div slot="message"></div>
+                            <label class="f"><span class="lab">Display name</span>
+                              <input type="text" name="displayName" placeholder="Dr Jane Smith"></label>
+                            <label class="f"><span class="lab">Professional title</span>
+                              <input type="text" name="professionalTitle" placeholder="Naturopath, BHSc"></label>
+                            <input class="btn" type="submit" value="Create profile">
+                          </collection-adder-form>
+                        </div>
+                      </template>
+                      <template slot="loader"><div class="spin">Loading your profile…</div></template>
+                      <template slot="error"><div class="err">Could not load your profile: {{$Clinician.error.message}}</div></template>
+                      <div slot="viewport"></div>
+                    </collection-viewer>
+          </template>
+          <div slot="viewport"></div>
+        </if-group>
+
+      </div>
+    </template>
+
+    <!-- ============================ PROFILE ============================ -->
+    <template slot="page" route-path="/clinician/profile" no-auth-redirect="/clinician" auto-reset-window-scroll>
+      <div class="wrap">
+        <h1>Your profile</h1>
+        <p class="muted">Changes save as you type. This is what patients read before booking.</p>
+
+        <collection-viewer
+          collection-type="Clinician"
+          collection-fields="accountId"
+          collection-view="accountView"
+          collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
+          collection-view-primary-fields="accountId"
+          collection-page-size="1"
+        >
+          <template slot="item">
+            <div class="card">
+              <h2>Basics</h2>
+              <div class="sub">Shown at the top of your public profile.</div>
+              <div class="grid2">
+                <label class="f"><span class="lab">Display name</span>
+                  <model-input type="text" model-type="Clinician" model-id="{{Clinician.id}}"
+                    model-field="displayName" show-error-message></model-input></label>
+                <label class="f"><span class="lab">Professional title</span>
+                  <model-input type="text" model-type="Clinician" model-id="{{Clinician.id}}"
+                    model-field="professionalTitle" placeholder="Naturopath, BHSc" show-error-message></model-input></label>
+              </div>
+              <label class="f"><span class="lab">Biography</span>
+                <model-input type="textarea" model-type="Clinician" model-id="{{Clinician.id}}"
+                  model-field="bio" height="170" show-error-message></model-input>
+                <span class="hint">At least 200 characters. Explain who you help and how you work.</span></label>
+            </div>
+
+            <div class="card">
+              <h2>Focus areas</h2>
+              <div class="sub">What patients search by. Up to 8 topics.</div>
+              <label class="f"><span class="lab">Your topics</span>
+                <model-input type="text" model-type="Clinician" model-id="{{Clinician.id}}"
+                  model-field="topics" placeholder="naturopathy,nutrition" show-error-message></model-input>
+                <span class="hint">Comma-separated slugs from the list below. Saasufy stores
+                  multi-value fields as comma-separated strings.</span></label>
+
+              <h3 style="margin-top:18px">Available topics</h3>
+              <div class="grid2">
+                <div>
+                  <div class="small muted" style="margin-bottom:6px">Specialisations</div>
+                  <collection-viewer
+                    collection-type="Topic" collection-fields="name,slug,kind"
+                    collection-view="kindView" collection-view-params="kind=specialisation"
+                    collection-view-primary-fields="kind" collection-page-size="30"
+                  >
+                    <template slot="item"><div class="small"><code>{{Topic.slug}}</code> — {{Topic.name}}</div></template>
+                    <template slot="no-item"><div class="empty small">None seeded.</div></template>
+                    <div slot="viewport"></div>
+                  </collection-viewer>
+                </div>
+                <div>
+                  <div class="small muted" style="margin-bottom:6px">Ailments</div>
+                  <collection-viewer
+                    collection-type="Topic" collection-fields="name,slug,kind"
+                    collection-view="kindView" collection-view-params="kind=ailment"
+                    collection-view-primary-fields="kind" collection-page-size="30"
+                  >
+                    <template slot="item"><div class="small"><code>{{Topic.slug}}</code> — {{Topic.name}}</div></template>
+                    <template slot="no-item"><div class="empty small">None seeded.</div></template>
+                    <div slot="viewport"></div>
+                  </collection-viewer>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <h2>Location &amp; consultation</h2>
+              <div class="sub">Consultations are online; location sets your timezone and search region.</div>
+              <div class="grid2">
+                <label class="f"><span class="lab">Country</span>
+                  <model-input type="select" options="au,nz" model-type="Clinician"
+                    model-id="{{Clinician.id}}" model-field="country" show-error-message></model-input></label>
+                <label class="f"><span class="lab">State / region</span>
+                  <model-input type="select" options="nsw,vic,qld,wa,sa,tas,act,nt" model-type="Clinician"
+                    model-id="{{Clinician.id}}" model-field="region" show-error-message></model-input></label>
+                <label class="f"><span class="lab">City</span>
+                  <model-input type="text" model-type="Clinician" model-id="{{Clinician.id}}"
+                    model-field="city" show-error-message></model-input></label>
+                <label class="f"><span class="lab">Timezone</span>
+                  <model-input type="select"
+                    options="Australia/Sydney,Australia/Melbourne,Australia/Brisbane,Australia/Adelaide,Australia/Perth,Australia/Hobart,Australia/Darwin,Pacific/Auckland"
+                    model-type="Clinician" model-id="{{Clinician.id}}" model-field="timezone" show-error-message></model-input></label>
+                <label class="f"><span class="lab">Consultation length</span>
+                  <model-input type="select"
+                    options="30 minutes:number=30,45 minutes:number=45,60 minutes:number=60"
+                    model-type="Clinician" model-id="{{Clinician.id}}"
+                    model-field="consultationMinutes" show-error-message></model-input>
+                  <span class="hint">Options carry an explicit <code>:number</code> type because
+                    <code>consultationMinutes</code> is a number field.</span></label>
+                <label class="f"><span class="lab">Fee (cents, AUD)</span>
+                  <model-input type="number" model-type="Clinician" model-id="{{Clinician.id}}"
+                    model-field="priceAmount" show-error-message></model-input>
+                  <span class="hint">Stored as integer cents — 13500 is $135.00.</span></label>
+                <label class="f"><span class="lab">Languages</span>
+                  <model-input type="text" model-type="Clinician" model-id="{{Clinician.id}}"
+                    model-field="languages" placeholder="English,Mandarin" show-error-message></model-input></label>
+                <label class="f"><span class="lab">Contact email (private)</span>
+                  <model-input type="text" model-type="Clinician" model-id="{{Clinician.id}}"
+                    model-field="contactEmail" show-error-message></model-input>
+                  <span class="hint">Never shown publicly.</span></label>
+              </div>
+            </div>
+
+            <div class="card">
+              <h2>Search indexing</h2>
+              <div class="sub">Maintained by the platform — shown here for transparency.</div>
+              <table class="plain">
+                <tr><th>Listing status</th><td><model-text model-type="Clinician" model-id="{{Clinician.id}}" model-field="listingStatus"></model-text></td></tr>
+                <tr><th>Search keys</th><td class="small"><model-text model-type="Clinician" model-id="{{Clinician.id}}" model-field="searchKeys" default-value="(empty — not listed)"></model-text></td></tr>
+                <tr><th>Next availability</th><td><model-text model-type="Clinician" model-id="{{Clinician.id}}" model-field="nextAvailableAt" default-value="0"></model-text></td></tr>
+              </table>
+            </div>
+          </template>
+          <template slot="no-item"><div class="card"><p class="muted">No profile yet — <a href="#/clinician">create one</a>.</p></div></template>
+          <template slot="loader"><div class="spin">Loading…</div></template>
+          <template slot="error"><div class="err">{{$Clinician.error.message}}</div></template>
+          <div slot="viewport"></div>
+        </collection-viewer>
+      </div>
+    </template>
+
+    <!-- ============================ CREDENTIALS ============================ -->
+    <template slot="page" route-path="/clinician/credentials" no-auth-redirect="/clinician">
+      <div class="wrap">
+        <h1>Your credentials</h1>
+        <p class="muted">At least one approved qualification is required before you can be listed.
+           Supporting documents are never shown publicly.</p>
+
+        <div class="card">
+          <h2>Submitted</h2>
+          <collection-viewer
+            collection-type="Credential"
+            type-alias="Cred"
+            collection-fields="type,institution,qualificationName,yearAwarded,reviewStatus,reviewNote"
+            collection-view="accountView"
+            collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
+            collection-view-primary-fields="accountId"
+            collection-page-size="20"
+          >
+            <template slot="item">
+              <div class="row">
+                <div class="grow">
+                  <div class="t">{{Cred.qualificationName}}</div>
+                  <div class="d">{{Cred.institution}} · {{Cred.yearAwarded}} · {{Cred.type}}</div>
+                  <if-group show-content="{{!!Credential.reviewNote}}">
+                    <template slot="content"><div class="d" style="margin-top:4px">Reviewer note: {{Cred.reviewNote}}</div></template>
+                    <div slot="viewport"></div>
+                  </if-group>
+                </div>
+                <switch-group show-cases="a={{Cred.reviewStatus === 'approved'}},p={{Cred.reviewStatus === 'pending'}},r={{Cred.reviewStatus === 'rejected'}}">
+                  <template slot="content" name="a"><span class="pill ok">approved</span></template>
+                  <template slot="content" name="p"><span class="pill pend">pending</span></template>
+                  <template slot="content" name="r"><span class="pill no">rejected</span></template>
+                  <div slot="viewport"></div>
+                </switch-group>
+                <collection-deleter model-id="{{Cred.id}}"
+                  confirm-message="Remove this credential? This cannot be undone."
+                  onclick="confirmDeleteItem()">&#x2715;</collection-deleter>
+              </div>
+            </template>
+            <template slot="no-item"><div class="empty">Nothing submitted yet.</div></template>
+            <template slot="loader"><div class="spin">Loading…</div></template>
+            <template slot="error"><div class="err">{{$Cred.error.message}}</div></template>
+            <div slot="viewport"></div>
+            <confirm-modal slot="modal" title="Remove credential" message="" confirm-button-label="Remove"></confirm-modal>
+          </collection-viewer>
+        </div>
+
+        <collection-viewer
+          collection-type="Clinician"
+          collection-fields="accountId"
+          collection-view="accountView"
+          collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
+          collection-view-primary-fields="accountId"
+          collection-page-size="1"
+        >
+          <template slot="item">
+            <div class="card">
+              <h2>Add a credential</h2>
+              <div class="sub">Submitted credentials go to our review queue.</div>
+              <collection-adder-form
+                collection-type="Credential"
+                model-values="accountId={{socket.authToken ? socket.authToken.accountId : ''}},clinicianId={{Clinician.id}},reviewStatus=pending"
+                computable-model-values
+                success-message="Submitted for review."
+                trim-spaces
+                show-field-errors
+              >
+                <div slot="message"></div>
+                <div class="grid2">
+                  <label class="f"><span class="lab">Type</span>
+                    <select name="type">
+                      <option value="degree">Degree</option>
+                      <option value="diploma">Diploma</option>
+                      <option value="certification">Certification</option>
+                      <option value="registration">Professional registration</option>
+                      <option value="licence">Licence</option>
+                    </select></label>
+                  <label class="f"><span class="lab">Year awarded</span>
+                    <input type="number" name="yearAwarded" output-type="number" placeholder="2014"></label>
+                  <label class="f"><span class="lab">Institution / body</span>
+                    <input type="text" name="institution" placeholder="Southern Cross University"></label>
+                  <label class="f"><span class="lab">Qualification name</span>
+                    <input type="text" name="qualificationName" placeholder="Bachelor of Health Science"></label>
+                  <label class="f"><span class="lab">Registration number (private)</span>
+                    <input type="text" name="registrationNumber" placeholder="Optional"></label>
+                </div>
+                <label class="f"><span class="lab">Supporting document</span>
+                  <input type="file" name="document" accept=".pdf,.png,.jpg,.jpeg">
+                  <span class="hint">PDF or image. Stored privately and only seen by our review team.</span></label>
+                <input class="btn" type="submit" value="Submit for review">
+              </collection-adder-form>
+            </div>
+          </template>
+          <template slot="no-item"><div class="card"><p class="muted">No profile yet — <a href="#/clinician">create one</a>.</p></div></template>
+          <template slot="error"><div class="err">{{$Clinician.error.message}}</div></template>
+          <div slot="viewport"></div>
+        </collection-viewer>
+      </div>
+    </template>
+
+    <!-- ============================ AVAILABILITY ============================ -->
+    <template slot="page" route-path="/clinician/availability" no-auth-redirect="/clinician">
+      <div class="wrap">
+        <h1>Your availability</h1>
+        <p class="muted">Set the hours you normally work, then block out days you are away.
+           We turn this into bookable appointment times on a rolling 60-day window.</p>
+
+        <div class="card">
+          <h2>Current schedule</h2>
+          <collection-viewer
+            collection-type="Availability"
+            collection-fields="kind,dayOfWeek,date,startMinute,endMinute,active"
+            collection-view="accountView"
+            collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
+            collection-view-primary-fields="accountId"
+            collection-page-size="50"
+          >
+            <template slot="item">
+              <div class="row">
+                <div class="grow">
+                  <switch-group show-cases="w={{Availability.kind === 'weekly'}},o={{Availability.kind === 'dayOff'}},e={{Availability.kind === 'extra'}}">
+                    <template slot="content" name="w">
+                      <div class="t">
+                        <switch-group show-cases="d0={{Availability.dayOfWeek === 0}},d1={{Availability.dayOfWeek === 1}},d2={{Availability.dayOfWeek === 2}},d3={{Availability.dayOfWeek === 3}},d4={{Availability.dayOfWeek === 4}},d5={{Availability.dayOfWeek === 5}},d6={{Availability.dayOfWeek === 6}}">
+                          <template slot="content" name="d0">Sunday</template>
+                          <template slot="content" name="d1">Monday</template>
+                          <template slot="content" name="d2">Tuesday</template>
+                          <template slot="content" name="d3">Wednesday</template>
+                          <template slot="content" name="d4">Thursday</template>
+                          <template slot="content" name="d5">Friday</template>
+                          <template slot="content" name="d6">Saturday</template>
+                          <div slot="viewport"></div>
+                        </switch-group>
+                      </div>
+                      <div class="d">Every week</div>
+                    </template>
+                    <template slot="content" name="o">
+                      <div class="t">Day off</div>
+                      <div class="d">{{date(Availability.date)}}</div>
+                    </template>
+                    <template slot="content" name="e">
+                      <div class="t">Extra hours</div>
+                      <div class="d">{{date(Availability.date)}}</div>
+                    </template>
+                    <div slot="viewport"></div>
+                  </switch-group>
+                </div>
+                <div class="small muted">
+                  {{Availability.startMinute / 60}}:00 &ndash; {{Availability.endMinute / 60}}:00
+                </div>
+                <collection-deleter model-id="{{Availability.id}}"
+                  confirm-message="Remove this availability entry?"
+                  onclick="confirmDeleteItem()">&#x2715;</collection-deleter>
+              </div>
+            </template>
+            <template slot="no-item"><div class="empty">Nothing set yet. Add your weekly hours below.</div></template>
+            <template slot="loader"><div class="spin">Loading…</div></template>
+            <template slot="error"><div class="err">Could not load availability: {{$Availability.error.message}}</div></template>
+            <div slot="viewport"></div>
+            <confirm-modal slot="modal" title="Remove availability" message="" confirm-button-label="Remove"></confirm-modal>
+          </collection-viewer>
+        </div>
+
+        <collection-viewer
+          collection-type="Clinician"
+          collection-fields="accountId"
+          collection-view="accountView"
+          collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
+          collection-view-primary-fields="accountId"
+          collection-page-size="1"
+        >
+          <template slot="item">
+            <div class="note">
+              Times are in your profile timezone
+              (<model-text model-type="Clinician" model-id="{{Clinician.id}}" model-field="timezone"
+                default-value="not set"></model-text>). Stored as minutes from local midnight.
+              Whole hours only for now — half-hour starts need a formatting helper in the template.
+            </div>
+
+            <div class="card">
+              <h2>Add weekly hours</h2>
+              <div class="sub">The hours you normally work on a given day.</div>
+              <collection-adder-form
+                collection-type="Availability"
+                model-values="accountId={{socket.authToken ? socket.authToken.accountId : ''}},clinicianId={{Clinician.id}},kind=weekly,active:boolean=true"
+                computable-model-values
+                success-message="Added."
+                show-field-errors
+              >
+                <div slot="message"></div>
+                <div class="grid2">
+                  <label class="f"><span class="lab">Day</span>
+                    <select name="dayOfWeek" output-type="number">
+                      <option value="1">Monday</option><option value="2">Tuesday</option>
+                      <option value="3">Wednesday</option><option value="4">Thursday</option>
+                      <option value="5">Friday</option><option value="6">Saturday</option>
+                      <option value="0">Sunday</option>
+                    </select></label>
+                  <label class="f"><span class="lab">&nbsp;</span>
+                    <input class="btn" type="submit" value="Add weekly hours"></label>
+                  <label class="f"><span class="lab">Starts at</span>
+                    <select name="startMinute" output-type="number">
+                      <option value="360">6:00 am</option><option value="420">7:00 am</option>
+                      <option value="480">8:00 am</option><option value="540" selected>9:00 am</option>
+                      <option value="600">10:00 am</option><option value="660">11:00 am</option>
+                      <option value="720">12:00 pm</option><option value="780">1:00 pm</option>
+                      <option value="840">2:00 pm</option><option value="900">3:00 pm</option>
+                    </select></label>
+                  <label class="f"><span class="lab">Ends at</span>
+                    <select name="endMinute" output-type="number">
+                      <option value="720">12:00 pm</option><option value="780">1:00 pm</option>
+                      <option value="840">2:00 pm</option><option value="900">3:00 pm</option>
+                      <option value="960">4:00 pm</option><option value="1020" selected>5:00 pm</option>
+                      <option value="1080">6:00 pm</option><option value="1140">7:00 pm</option>
+                      <option value="1200">8:00 pm</option><option value="1260">9:00 pm</option>
+                    </select></label>
+                </div>
+              </collection-adder-form>
+            </div>
+
+            <div class="card">
+              <h2>Block out a day</h2>
+              <div class="sub">Overrides your weekly pattern for a single date.</div>
+              <collection-adder-form
+                collection-type="Availability"
+                model-values="accountId={{socket.authToken ? socket.authToken.accountId : ''}},clinicianId={{Clinician.id}},kind=dayOff,startMinute:number=0,endMinute:number=1440,active:boolean=true"
+                computable-model-values
+                success-message="Day blocked."
+                show-field-errors
+              >
+                <div slot="message"></div>
+                <div class="grid2">
+                  <label class="f"><span class="lab">Date (epoch ms, local midnight)</span>
+                    <input type="number" name="date" output-type="number" placeholder="1790000000000"></label>
+                  <label class="f"><span class="lab">&nbsp;</span>
+                    <input class="btn" type="submit" value="Block this day"></label>
+                </div>
+                <div class="small muted">A date picker replaces this once the worker handles timezone conversion.</div>
+              </collection-adder-form>
+            </div>
+          </template>
+          <template slot="no-item"><div class="card"><p class="muted">No profile yet — <a href="#/clinician">create one</a>.</p></div></template>
+          <template slot="error"><div class="err">{{$Clinician.error.message}}</div></template>
+          <div slot="viewport"></div>
+        </collection-viewer>
+      </div>
+    </template>
+
+    <!-- ============================ PAYOUTS ============================ -->
+    <template slot="page" route-path="/clinician/payouts" no-auth-redirect="/clinician">
+      <div class="wrap">
+        <h1>Payout details</h1>
+        <p class="muted">Where your share goes after each completed consultation.
+           We pay out 24 hours after the appointment ends.</p>
+
+        <collection-viewer
+          collection-type="Clinician"
+          collection-fields="accountId"
+          collection-view="accountView"
+          collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
+          collection-view-primary-fields="accountId"
+          collection-page-size="1"
+        >
+          <template slot="item">
+            <div class="card">
+              <h2>Status</h2>
+              <p>Current payout status:
+                <strong><model-text model-type="Clinician" model-id="{{Clinician.id}}"
+                  model-field="payoutStatus" default-value="none"></model-text></strong></p>
+              <div class="note">
+                <strong>Not wired up yet.</strong> Bank details go straight to our payment provider
+                and are exchanged for a token — the account number itself is never stored on our
+                side. This form is inert until the backend worker exists.
+              </div>
+              <div class="grid2">
+                <label class="f"><span class="lab">Account name</span>
+                  <input type="text" placeholder="Sarah Chen" disabled></label>
+                <label class="f"><span class="lab">BSB</span>
+                  <input type="text" placeholder="062-000" disabled></label>
+                <label class="f"><span class="lab">Account number</span>
+                  <input type="text" placeholder="12345678" disabled></label>
+                <label class="f"><span class="lab">&nbsp;</span>
+                  <button class="btn" disabled>Save payout details</button></label>
+              </div>
+            </div>
+
+            <div class="card">
+              <h2>How you get paid</h2>
+              <table class="plain">
+                <tr><th>Patient pays</th><td>In full at the time of booking</td></tr>
+                <tr><th>Platform fee</th><td>15% of the consultation fee</td></tr>
+                <tr><th>You receive</th><td>The remaining 85%, less nothing else</td></tr>
+                <tr><th>When</th><td>24 hours after the consultation ends, once attendance is recorded</td></tr>
+                <tr><th>If the patient does not attend</th><td>You are still paid — your time was reserved</td></tr>
+              </table>
+            </div>
+          </template>
+          <template slot="no-item"><div class="card"><p class="muted">No profile yet — <a href="#/clinician">create one</a>.</p></div></template>
+          <div slot="viewport"></div>
+        </collection-viewer>
+      </div>
+    </template>
+
+    <!-- ============================ ADMIN REVIEW QUEUE ============================ -->
+    <template slot="page" route-path="/admin/reviews" no-auth-redirect="/clinician">
+      <div class="wrap">
+        <h1>Credential review</h1>
+        <p class="muted">Approve or reject submitted qualifications. Confirm the name on the
+           credential matches the name on the practitioner's payout account before approving.</p>
+
+        <div class="card">
+          <div class="sechead"><h2>Pending</h2></div>
+          <collection-viewer
+            collection-type="Credential"
+            type-alias="Cred"
+            collection-fields="type,institution,qualificationName,yearAwarded,clinicianId"
+            collection-view="reviewQueueView"
+            collection-view-params="reviewStatus=pending"
+            collection-view-primary-fields="reviewStatus"
+            collection-page-size="25"
+          >
+            <template slot="item">
+              <div class="row">
+                <div class="grow">
+                  <div class="t">{{Cred.qualificationName}}</div>
+                  <div class="d">{{Cred.institution}} · {{Cred.yearAwarded}} · {{Cred.type}}</div>
+                  <div class="d small"><a href="#/p/{{Cred.clinicianId}}">View practitioner</a></div>
+                </div>
+                <div style="min-width:210px">
+                  <label class="f" style="margin:0"><span class="lab">Decision</span>
+                    <model-input type="select" options="pending,approved,rejected"
+                      model-type="Credential" model-id="{{Cred.id}}"
+                      model-field="reviewStatus" show-error-message></model-input></label>
+                  <label class="f" style="margin:8px 0 0"><span class="lab">Note to practitioner</span>
+                    <model-input type="text" model-type="Credential" model-id="{{Cred.id}}"
+                      model-field="reviewNote" placeholder="Optional" show-error-message></model-input></label>
+                </div>
+              </div>
+            </template>
+            <template slot="no-item"><div class="empty">Nothing waiting for review.</div></template>
+            <template slot="loader"><div class="spin">Loading queue…</div></template>
+            <template slot="error"><div class="err">{{$Cred.error.message}}</div></template>
+            <div slot="viewport"></div>
+          </collection-viewer>
+        </div>
+
+        <div class="card">
+          <div class="sechead"><h2>Recently approved</h2></div>
+          <collection-viewer
+            collection-type="Credential"
+            type-alias="Cred"
+            collection-fields="qualificationName,institution,yearAwarded"
+            collection-view="reviewQueueView"
+            collection-view-params="reviewStatus=approved"
+            collection-view-primary-fields="reviewStatus"
+            collection-page-size="10"
+          >
+            <template slot="item">
+              <div class="row">
+                <div class="grow">
+                  <div class="t">{{Cred.qualificationName}}</div>
+                  <div class="d">{{Cred.institution}} · {{Cred.yearAwarded}}</div>
+                </div>
+                <span class="pill ok">approved</span>
+              </div>
+            </template>
+            <template slot="no-item"><div class="empty">None yet.</div></template>
+            <template slot="error"><div class="err">{{$Cred.error.message}}</div></template>
+            <div slot="viewport"></div>
+          </collection-viewer>
+        </div>
+      </div>
+    </template>
+
+    <!-- ============================ OAUTH CALLBACK ============================ -->
+    <template slot="page" route-path="/auth/callback">
+      <div class="wrap">
+        <div class="card">
+          <h2>Signing you in…</h2>
+          <p class="muted">Completing authentication with Keycloak.</p>
+          <oauth-handler
+            provider="keycloak"
+            redirect-uri="http://localhost:8100/index.html"
+            success-location-hash="/clinician"
+            auth-timeout="15000"
+          ></oauth-handler>
+          <p class="small muted">If you are not redirected, <a href="#/clinician">try signing in again</a>.</p>
+        </div>
+      </div>
+    </template>
+
+    <!-- ============================ 404 ============================ -->
+    <template slot="page" route-path="/not-found">
+      <div class="wrap">
+        <h1>Page not found</h1>
+        <p class="muted"><a href="#/">Back to home</a></p>
+      </div>
+    </template>
+
+    <div slot="viewport"></div>
+  </app-router>
+  </main>
+
+</socket-provider>
+
+</body>
+</html>
