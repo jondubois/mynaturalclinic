@@ -174,7 +174,9 @@ fields(m, 'Clinician', [
     {'name': 'displayName', 'type': S, 'max': 120},
     {'name': 'professionalTitle', 'type': S, 'max': 120},
     {'name': 'bio', 'type': S, 'max': 5000},
-    {'name': 'photo', 'type': S, 'blob': True},
+    # max on a string field is a maximum length, so this caps the stored base64
+    # data URI at ~150 KB of image. Saasufy rejects anything larger on write.
+    {'name': 'photo', 'type': S, 'blob': True, 'max': 200000},
     {'name': 'topics', 'type': S, 'multi': True, 'maxCardinality': 8},
     {'name': 'country', 'type': S, 'max': 2, 'lowercase': True},
     {'name': 'region', 'type': S, 'max': 60, 'lowercase': True},
