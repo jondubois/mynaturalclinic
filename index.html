@@ -51,6 +51,11 @@
   nav.main{display:flex;gap:18px;margin-left:auto;flex-wrap:wrap}
   nav.main a{color:var(--muted);font-size:.9rem}
   nav.main a:hover{color:var(--accent);text-decoration:none}
+  /* The auth links are rendered into the nested app-router's viewport, so they are
+     not direct children of nav.main and do not inherit its gap. Repeat it on the
+     viewport so Log in / Sign up sit the same distance apart as the other links. */
+  nav.main app-router{display:flex;align-items:center}
+  nav.main app-router > [slot=viewport]{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
 
   /* dev banner */
   .devbar{background:var(--warn-soft);border-bottom:1px solid #eadfbc;color:var(--warn);
@@ -75,11 +80,44 @@
     border:1px solid var(--border);border-radius:8px;padding:9px 11px}
   input:focus,select:focus,textarea:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
   textarea{min-height:120px;resize:vertical}
-  model-input,input-provider{display:block}
+  input-provider{display:block}
   model-input input,model-input textarea,model-input select,
   input-provider input,input-provider select{width:100%;font:inherit;color:inherit;
     background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 11px}
-  model-input.error input{border-color:var(--danger)}
+  /* Validation feedback. model-input appends .error-message-container and toggles
+     .error / .hidden on it; collection-adder-form uses
+     .collection-adder-field-error-container for per-field errors and puts .error or
+     .success on its slotted message div. In every case the class lands on the inner
+     element, not on the custom-element host. */
+  .error-message-container,
+  .collection-adder-field-error-container,
+  [slot=message].error{color:var(--danger);font-size:.82rem;line-height:1.4;margin:0 0 5px}
+  .error-message-container,
+  .collection-adder-field-error-container{margin:5px 0 0}
+  [slot=message].success{color:var(--accent);font-size:.82rem;line-height:1.4;margin:0 0 5px}
+  .error-message-container.hidden,
+  .error-message-container:empty,
+  .collection-adder-field-error-container:empty{display:none}
+  model-input input.error,model-input select.error,model-input textarea.error,
+  input.error,select.error,textarea.error{border-color:var(--danger)}
+  model-input input.error:focus,model-input select.error:focus,
+  model-input textarea.error:focus{outline:2px solid #fbeded}
+  model-input input.success,model-input select.success,
+  model-input textarea.success{border-color:#cfe2d6}
+
+  /* Both components insert their error element BEFORE the input — model-input
+     appends the container first, and collection-adder-form does
+     insertBefore(errorDiv, input). Reorder visually with flex rather than moving
+     DOM nodes the components own. */
+  model-input{display:flex;flex-direction:column}
+  model-input > input,model-input > select,model-input > textarea{order:1}
+  model-input > .error-message-container{order:2}
+  label.f{display:flex;flex-direction:column}
+  label.f > .lab{order:0}
+  label.f > input,label.f > select,label.f > textarea,
+  label.f > model-input,label.f > input-provider{order:1}
+  label.f > .collection-adder-field-error-container{order:2}
+  label.f > .hint{order:3}
 
   /* oauth-link and friends are custom elements (display:inline by default) that wrap a
      block-level viewport div; leaving them inline breaks button alignment. */
@@ -105,8 +143,14 @@
   ul.check{list-style:none;padding:0;margin:0}
   ul.check li{display:flex;gap:13px;align-items:flex-start;padding:13px 0;border-top:1px solid var(--border)}
   ul.check li:first-child{border-top:0}
-  .mark{flex:0 0 22px;height:22px;border-radius:50%;display:grid;place-items:center;
-    font-size:.72rem;font-weight:700;margin-top:1px}
+  /* width, not just flex-basis: steps wrapped in a switch-group are not flex items
+     of the <li>, so the shorthand would not apply and the circle would size to its
+     glyph. The wrapper is given the same fixed track so every row indents alike. */
+  .mark{flex:0 0 22px;width:22px;height:22px;border-radius:50%;display:grid;
+    place-items:center;font-size:.72rem;font-weight:700;margin-top:1px;
+    box-sizing:border-box}
+  ul.check li > switch-group{flex:0 0 22px;display:block}
+  ul.check li > switch-group > [slot=viewport]{display:block}
   .mark.done{background:var(--accent);color:#fff}
   .mark.todo{background:#efedea;color:var(--muted);border:1px solid var(--border)}
   .ck-body{flex:1}
@@ -208,45 +252,61 @@
       <nav class="main">
         <a href="#/">Home</a>
         <a href="#/browse">Browse</a>
-        <if-group show-content="{{!socket.authToken}}">
-          <template slot="content"><a href="#/clinician">For clinicians</a></template>
-          <div slot="viewport"></div>
-        </if-group>
-        <if-group show-content="{{!!socket.authToken}}">
-          <template slot="content"><a href="#/clinician">Dashboard</a></template>
-          <div slot="viewport"></div>
-        </if-group>
-        <a href="#/admin/reviews">Admin</a>
-        <if-group show-content="{{!!socket.authToken}}">
-          <template slot="content">
+        <a href="#/clinician">Dashboard</a>
+
+        <!-- The nav sits outside the main app-router, so if-group cannot be used
+             here: it evaluates nothing itself and needs a template-rendering parent.
+             A second app-router provides one. Neither of its route paths ever matches
+             a real hash, so default-page resolves to /nav-auth and the auth redirects
+             choose the branch. Redirects are soft by default, so this router never
+             touches the URL the main router reads. -->
+        <app-router default-page="/nav-auth">
+          <template slot="page" route-path="/nav-auth" no-auth-redirect="/nav-anon">
             <log-out onclick="logOut()"><a href="javascript:void(0)">Log out</a></log-out>
           </template>
+          <template slot="page" route-path="/nav-anon" auth-redirect="/nav-auth">
+          <oauth-link
+            provider="keycloak"
+            client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+            redirect-uri="http://localhost:8100/index.html"
+            grant-type="authorization_code"
+          >
+            <template slot="item">
+              <a href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}">Log in</a>
+            </template>
+            <div slot="viewport"></div>
+          </oauth-link>
+          <oauth-link
+            provider="keycloak"
+            client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+            redirect-uri="http://localhost:8100/index.html"
+            grant-type="authorization_code"
+          >
+            <template slot="item">
+              <a href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}&amp;prompt=create">Sign up</a>
+            </template>
+            <div slot="viewport"></div>
+          </oauth-link>
+          </template>
           <div slot="viewport"></div>
-        </if-group>
+        </app-router>
       </nav>
     </div>
   </header>
 
   <div class="devbar">
     <div class="wrap">
-      <if-group show-content="{{!socket.authToken}}">
-        <template slot="content">
-          Not signed in — public pages only.
-          <a href="#/clinician">Sign up or log in</a> to manage a practitioner profile.
-        </template>
-        <div slot="viewport"></div>
-      </if-group>
-      <if-group show-content="{{!!socket.authToken}}">
-        <template slot="content">
-          Signed in as <code>{{socket.authToken.accountId}}</code>.
-        </template>
-        <div slot="viewport"></div>
-      </if-group>
+      Development build — <a href="#/clinician">sign in or join</a> to manage a practitioner profile.
     </div>
   </div>
 
   <main>
-  <app-router default-page="/" auto-reset-window-scroll>
+  <!-- /clinician renders either the join pitch or the dashboard depending on auth
+       state, and has no no-auth-redirect (it cannot redirect to itself). app-router
+       re-runs renderCurrentPage on authStateChange but skips the render when the
+       path is unchanged, so logging out while on that page left the old content in
+       place. force-render-paths clears lastPageState for it so the branch re-evaluates. -->
+  <app-router default-page="/" auto-reset-window-scroll force-render-paths="/clinician">
 
     <!-- ============================ HOME ============================ -->
     <template slot="page" route-path="/">
@@ -263,19 +323,19 @@
 
         <div class="card">
           <h2>Recently listed</h2>
-          <div class="sub">Reads <code>Clinician.browseView</code>, ordered by soonest availability.</div>
+          <div class="sub">Practitioners currently listed.</div>
           <collection-viewer
             collection-type="Clinician"
-            collection-fields="displayName,professionalTitle,city,region,priceAmount,listingStatus"
-            collection-view="browseView"
-            collection-view-params="query="
-            collection-view-primary-fields=""
+            collection-fields="displayName,professionalTitle,city,region,priceAmount"
+            collection-view="searchView"
+            collection-view-params="listingStatus=listed,query=,sortBy=displayName"
+            collection-view-primary-fields="listingStatus"
             collection-page-size="5"
           >
             <template slot="item">
               <div class="row">
                 <div class="grow">
-                  <div class="t">{{Clinician.displayName}}</div>
+                  <div class="t"><a href="#/p/{{Clinician.id}}">{{Clinician.displayName}}</a></div>
                   <div class="d">{{Clinician.professionalTitle}} · {{Clinician.city}}</div>
                 </div>
                 <div class="small muted">${{Clinician.priceAmount / 100}}</div>
@@ -297,21 +357,22 @@
       <div class="wrap">
         <h1>Practitioners</h1>
         <p class="muted">Patient-facing search arrives with the patient flow. This page previews
-           the same <code>searchView</code> the search will use.</p>
+           the same <code>searchView</code> the search will use. Only practitioners an admin has
+           marked as listed appear here — flipping that status is all it takes.</p>
 
         <div class="card">
           <div class="toolbar">
             <input-provider
               type="select"
-              options="au-nsw,au-vic,au-qld,naturopathy,nutrition,acupuncture,au-nsw|naturopathy"
-              value="au-nsw"
+              options="Everyone=,New South Wales=region {{'='}} nsw,Victoria=region {{'='}} vic,Naturopathy=topics contains (?i)naturopathy,Nutrition=topics contains (?i)nutrition,Acupuncture=topics contains (?i)acupuncture"
+              value=""
               consumers=".search-results:collection-view-params"
-              provider-template="searchKey={{value}},query=,sortBy=nextAvailableAt"
+              provider-template="listingStatus=listed,query={{value}},sortBy=displayName"
             ></input-provider>
           </div>
           <div class="small muted" style="margin-bottom:10px">
-            Each option is one element of the indexed <code>searchKeys</code> array — region,
-            topic, or a region|topic composite.
+            The view is indexed on <code>listingStatus</code>; each option supplies the
+            second-phase filter query over ordinary fields.
           </div>
 
           <collection-viewer
@@ -319,8 +380,8 @@
             collection-type="Clinician"
             collection-fields="displayName,professionalTitle,city,priceAmount,consultationMinutes"
             collection-view="searchView"
-            collection-view-params="searchKey=au-nsw,query=,sortBy=nextAvailableAt"
-            collection-view-primary-fields="searchKey"
+            collection-view-params="listingStatus=listed,query=,sortBy=displayName"
+            collection-view-primary-fields="listingStatus"
             collection-page-size="10"
             auto-reset-page-offset
           >
@@ -386,6 +447,10 @@
                         <div class="grow">
                           <div class="t">{{Cred.qualificationName}}</div>
                           <div class="d">{{Cred.institution}} · {{Cred.yearAwarded}}</div>
+                          <!-- Documents are world-readable; we only surface the link once a
+                               reviewer has approved the credential. -->
+                          <div class="d small"><a href="https://saasufy.com/sid8016/files/Credential/{{Cred.id}}/document"
+                            target="_blank" rel="noopener">View certificate</a></div>
                         </div>
                         <span class="pill ok">verified</span>
                       </div>
@@ -492,7 +557,7 @@
                         <model-viewer
                           model-type="Clinician"
                           model-id="{{Clinician.id}}"
-                          model-fields="displayName,professionalTitle,bio,topics,country,region,city,timezone,priceAmount,consultationMinutes,listingStatus,emailVerified,payoutStatus,nextAvailableAt"
+                          model-fields="displayName,professionalTitle,bio,topics,country,region,city,timezone,priceAmount,consultationMinutes,listingStatus,emailVerified,payoutStatus"
                           type-alias="C"
                         >
                           <template slot="item">
@@ -551,17 +616,30 @@
                                   </div>
                                 </li>
                                 <li>
-                                  <switch-group show-cases="y={{C.nextAvailableAt > 0}},n={{!(C.nextAvailableAt > 0)}}">
-                                    <template slot="content" name="y"><div class="mark done">&#10003;</div></template>
-                                    <template slot="content" name="n"><div class="mark todo">5</div></template>
-                                    <div slot="viewport"></div>
-                                  </switch-group>
+                                  <div class="mark todo">5</div>
                                   <div class="ck-body">
                                     <div class="t"><a href="#/clinician/availability">Publish your availability</a></div>
                                     <div class="d">A weekly pattern the booking system turns into bookable times.</div>
                                   </div>
                                 </li>
                               </ul>
+                            </div>
+
+                            <div class="card">
+                              <h2>Signed in</h2>
+                              <p class="muted" style="margin:0">
+                                <model-text model-type="Account"
+                                  model-id="{{socket.authToken ? socket.authToken.accountId : ''}}"
+                                  model-field="email" default-value="(account)"></model-text>
+                              </p>
+                              <if-group show-content="{{!!socket.authToken && !!socket.authToken.groupMemberships && socket.authToken.groupMemberships.includes('620af869-cb09-4a20-bcf4-ed10510b3367')}}">
+                                <template slot="content">
+                                  <p style="margin:12px 0 0">
+                                    <a class="btn sec" href="#/admin/reviews">Credential review queue</a>
+                                  </p>
+                                </template>
+                                <div slot="viewport"></div>
+                              </if-group>
                             </div>
 
                             <div class="card">
@@ -720,12 +798,11 @@
             </div>
 
             <div class="card">
-              <h2>Search indexing</h2>
-              <div class="sub">Maintained by the platform — shown here for transparency.</div>
+              <h2>Listing</h2>
+              <div class="sub">Set by a reviewer once your profile and credentials check out.</div>
               <table class="plain">
                 <tr><th>Listing status</th><td><model-text model-type="Clinician" model-id="{{Clinician.id}}" model-field="listingStatus"></model-text></td></tr>
-                <tr><th>Search keys</th><td class="small"><model-text model-type="Clinician" model-id="{{Clinician.id}}" model-field="searchKeys" default-value="(empty — not listed)"></model-text></td></tr>
-                <tr><th>Next availability</th><td><model-text model-type="Clinician" model-id="{{Clinician.id}}" model-field="nextAvailableAt" default-value="0"></model-text></td></tr>
+                <tr><th>Visible in search</th><td>Only while listing status is <code>listed</code>.</td></tr>
               </table>
             </div>
           </template>
@@ -760,8 +837,13 @@
                 <div class="grow">
                   <div class="t">{{Cred.qualificationName}}</div>
                   <div class="d">{{Cred.institution}} · {{Cred.yearAwarded}} · {{Cred.type}}</div>
-                  <if-group show-content="{{!!Credential.reviewNote}}">
+                  <if-group show-content="{{!!Cred.reviewNote}}">
                     <template slot="content"><div class="d" style="margin-top:4px">Reviewer note: {{Cred.reviewNote}}</div></template>
+                    <div slot="viewport"></div>
+                  </if-group>
+                  <if-group show-content="{{Cred.reviewStatus === 'approved'}}">
+                    <template slot="content"><div class="d small"><a href="https://saasufy.com/sid8016/files/Credential/{{Cred.id}}/document"
+                      target="_blank" rel="noopener">View certificate</a></div></template>
                     <div slot="viewport"></div>
                   </if-group>
                 </div>
@@ -1044,15 +1126,80 @@
     <template slot="page" route-path="/admin/reviews" no-auth-redirect="/clinician">
       <div class="wrap">
         <h1>Credential review</h1>
+
+        <!-- Membership of the admin Group is what grants access here. The same
+             group id is on every Credential, so Saasufy enforces it server-side
+             too: reading the supporting document and updating the review fields
+             both check groupMemberships against Credential.groupId. -->
+        <if-group show-content="{{!(socket.authToken && socket.authToken.groupMemberships && socket.authToken.groupMemberships.includes('620af869-cb09-4a20-bcf4-ed10510b3367'))}}">
+          <template slot="content">
+            <div class="card">
+              <h2>Not authorised</h2>
+              <p class="muted">This page is for reviewers. Your account is not a member of the
+                 admin group, so the platform will not release credential documents to you.</p>
+              <a class="btn sec" href="#/clinician">Back to your dashboard</a>
+            </div>
+          </template>
+          <div slot="viewport"></div>
+        </if-group>
+
+        <if-group show-content="{{!!socket.authToken && !!socket.authToken.groupMemberships && socket.authToken.groupMemberships.includes('620af869-cb09-4a20-bcf4-ed10510b3367')}}">
+          <template slot="content">
         <p class="muted">Approve or reject submitted qualifications. Confirm the name on the
            credential matches the name on the practitioner's payout account before approving.</p>
+
+        <div class="card">
+          <div class="sechead"><h2>Practitioner listings</h2></div>
+          <div class="sub">Marking a practitioner <code>listed</code> puts them into patient
+            search immediately — search is indexed on this field, so there is nothing else to
+            update.</div>
+          <div class="toolbar">
+            <input-provider
+              type="select"
+              options="Draft=draft,In review=pending_review,Listed=listed,Suspended=suspended"
+              value="pending_review"
+              consumers=".listing-results:collection-view-params"
+              provider-template="listingStatus={{value}},query=,sortBy=displayName"
+            ></input-provider>
+          </div>
+          <collection-viewer
+            class="listing-results"
+            collection-type="Clinician"
+            collection-fields="displayName,professionalTitle,city,region,contactEmail"
+            collection-view="searchView"
+            collection-view-params="listingStatus=pending_review,query=,sortBy=displayName"
+            collection-view-primary-fields="listingStatus"
+            collection-page-size="25"
+            auto-reset-page-offset
+          >
+            <template slot="item">
+              <div class="row">
+                <div class="grow">
+                  <div class="t"><a href="#/p/{{Clinician.id}}">{{Clinician.displayName}}</a></div>
+                  <div class="d">{{Clinician.professionalTitle}} · {{Clinician.city}}, {{Clinician.region}}</div>
+                  <div class="d small">{{Clinician.contactEmail}}</div>
+                </div>
+                <div style="min-width:210px">
+                  <label class="f" style="margin:0"><span class="lab">Listing status</span>
+                    <model-input type="select" options="draft,pending_review,listed,suspended"
+                      model-type="Clinician" model-id="{{Clinician.id}}"
+                      model-field="listingStatus" show-error-message></model-input></label>
+                </div>
+              </div>
+            </template>
+            <template slot="no-item"><div class="empty">No practitioners with that status.</div></template>
+            <template slot="loader"><div class="spin">Loading…</div></template>
+            <template slot="error"><div class="err">{{$Clinician.error.message}}</div></template>
+            <div slot="viewport"></div>
+          </collection-viewer>
+        </div>
 
         <div class="card">
           <div class="sechead"><h2>Pending</h2></div>
           <collection-viewer
             collection-type="Credential"
             type-alias="Cred"
-            collection-fields="type,institution,qualificationName,yearAwarded,clinicianId"
+            collection-fields="type,institution,qualificationName,yearAwarded,clinicianId,registrationNumber"
             collection-view="reviewQueueView"
             collection-view-params="reviewStatus=pending"
             collection-view-primary-fields="reviewStatus"
@@ -1063,7 +1210,12 @@
                 <div class="grow">
                   <div class="t">{{Cred.qualificationName}}</div>
                   <div class="d">{{Cred.institution}} · {{Cred.yearAwarded}} · {{Cred.type}}</div>
-                  <div class="d small"><a href="#/p/{{Cred.clinicianId}}">View practitioner</a></div>
+                  <div class="d small">Registration no. {{Cred.registrationNumber}}</div>
+                  <div class="d small">
+                    <a href="#/p/{{Cred.clinicianId}}">View practitioner</a> ·
+                    <a href="https://saasufy.com/sid8016/files/Credential/{{Cred.id}}/document"
+                       target="_blank" rel="noopener">Supporting document</a>
+                  </div>
                 </div>
                 <div style="min-width:210px">
                   <label class="f" style="margin:0"><span class="lab">Decision</span>
@@ -1108,6 +1260,9 @@
             <div slot="viewport"></div>
           </collection-viewer>
         </div>
+          </template>
+          <div slot="viewport"></div>
+        </if-group>
       </div>
     </template>
 
@@ -1120,7 +1275,7 @@
           <oauth-handler
             provider="keycloak"
             redirect-uri="http://localhost:8100/index.html"
-            success-location-hash="/clinician"
+            success-url="http://localhost:8100/index.html#/clinician"
             auth-timeout="15000"
           ></oauth-handler>
           <p class="small muted">If you are not redirected, <a href="#/clinician">try signing in again</a>.</p>
@@ -1141,6 +1296,7 @@
   </main>
 
 </socket-provider>
+
 
 </body>
 </html>

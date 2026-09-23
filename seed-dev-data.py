@@ -62,7 +62,7 @@ print(f'  {len(TOPICS)} topics')
 print('\nseeding demo clinician...')
 clin = call('POST', 'Clinician', dict(
     accountId=ACCOUNT,
-    displayName='Dr Sarah Chen', searchName='dr sarah chen',
+    displayName='Dr Sarah Chen',
     professionalTitle='Naturopath, BHSc (Naturopathy)',
     bio=('Sarah is a degree-qualified naturopath with over twelve years of clinical experience, '
          'working primarily with digestive health, fatigue and hormonal concerns. She takes an '
@@ -70,15 +70,11 @@ clin = call('POST', 'Clinician', dict(
          'with careful attention to the whole picture of a person’s health. Sarah consults '
          'online and works closely with each client to build a realistic, sustainable plan.'),
     topics='naturopathy,nutrition,digestive-health,fatigue',
-    searchTags='naturopathy nutrition digestive health gut ibs bloating fatigue tired',
-    searchKeys='au-nsw,naturopathy,nutrition,digestive-health,fatigue,'
-               'au-nsw|naturopathy,au-nsw|nutrition,au-nsw|digestive-health,au-nsw|fatigue',
     country='au', region='nsw', city='Sydney', timezone='Australia/Sydney',
     languages='English,Mandarin',
     consultationMinutes=45, priceAmount=13500, priceCurrency='AUD',
     contactEmail='sarah.chen@example.com',
-    listingStatus='pending_review', emailVerified=True,
-    payoutStatus='none', nextAvailableAt=0))
+    listingStatus='listed', emailVerified=True, payoutStatus='none'))
 if str(clin).startswith('ERR'): raise SystemExit(f'clinician seed failed: {clin}')
 print('  clinician id:', clin)
 

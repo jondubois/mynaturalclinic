@@ -1,6 +1,6 @@
 # MyNaturalClinic — MVP Requirements
 
-**Status:** Draft v6 · 2026-09-22 — schema built, deployed and functionally verified on `sid8016`; range views use compound indexes with composite bounds (§6.4.8)
+**Status:** Draft v7 · 2026-09-23 — search simplified: `listingStatus` is the only thing that controls visibility, and the derived search fields are gone (§6.4)
 **Product:** A marketplace where patients find natural therapists and clinicians by name, location, ailment/specialisation and availability, and book a paid online consultation.
 
 ---
@@ -191,21 +191,17 @@ One row per practitioner. This is both the profile **and** the search listing �
 | --- | --- | --- |
 | `accountId` | string | Owner. Auth field. |
 | `displayName` | string | Public |
-| `searchName` | string | Lowercased `displayName`, for case-insensitive matching |
 | `professionalTitle` | string | e.g. "Naturopath, BHSc" |
 | `bio` | string | min 200 chars |
 | `photo` | string | `blob` |
-| `topics` | string | `multi` — slugs from `Topic`. **`maxCardinality: 8`** — this cap is what bounds `searchKeys` and is therefore load-bearing, not cosmetic (§6.4.2) |
-| `searchTags` | string | Lowercased concatenation of topic slugs and synonyms, for phase-2 matching |
+| `topics` | string | `multi` — slugs from `Topic`, `maxCardinality: 8`. Matched directly by the search query; there is no derived copy |
 | `country`, `region`, `city` | string | Public |
 | `timezone` | string | IANA name |
 | `languages` | string | `multi` |
 | `consultationMinutes` | number | 30 / 45 / 60 |
 | `priceAmount` | number | integer cents |
 | `priceCurrency` | string | MVP: `AUD` |
-| **Search fields — worker-maintained** | | |
-| `searchKeys` | string | **`multi`, element-wise indexed — the primary search index (§6.4.2).** Each element is a pre-joined lookup key: the region (`au-nsw`), each topic (`naturopathy`), and each region+topic pair (`au-nsw|naturopathy`). **Empty unless the clinician is listed** — this is what keeps unlisted clinicians out of search without a separate table (§6.4.3). `maxCardinality: 17` |
-| `nextAvailableAt` | number | Start of their soonest open slot; `0` when they have none |
+| **Listing** | | |
 | `listingStatus` | string | enum `draft,pending_review,listed,suspended` — **worker/admin write only** |
 | **Private fields — field-level `accessRead: restrict`** | | |
 | `contactEmail` | string | Never public |
@@ -281,7 +277,7 @@ The queue the worker drains. `toAccountId`, `toEmail`, `template`, `payload` (JS
 
 **REQ-PROF-1** The clinician dashboard uses `<model-input>` bound to `Clinician` fields so edits save and sync in realtime without a save button, wrapped in a `<render-group>` so the form appears only once fully loaded.
 **REQ-PROF-2** The topic picker is an `<input-provider>` bound to a `<collection-viewer>` over `Topic`, combined via `<input-combiner>` into the `topics` multi field. Specialisations and ailments share one picker, filtered by `kind`. The picker must enforce the 8-topic cap (REQ-SEARCH-3).
-**REQ-PROF-3** When the clinician edits `displayName`, topics, location or price, the worker rebuilds `searchName`, `searchTags` and the whole `searchKeys` array on their `Clinician` row within 60 seconds, and re-denormalises `priceAmount` / `consultationMinutes` onto their future `TimeSlot` records. `searchKeys` is replaced wholesale, never patched, since a topic or region change invalidates every composite key. Search results are eventually consistent within that window; slot booking is not, because it reads `TimeSlot` directly.
+**REQ-PROF-3** Profile edits take effect in search immediately — the query matches the practitioner's own fields, so there is nothing derived to rebuild and no consistency window. The worker's only remaining denormalisation here is copying `priceAmount` / `consultationMinutes` onto future `TimeSlot` records so a slot renders without a join.
 **REQ-PROF-4** A profile-completeness checklist shows, via `<if-group>`, exactly which of the REQ-CLIN-4 conditions are still unmet.
 
 ### 6.2 Credentials
@@ -307,57 +303,24 @@ The queue the worker drains. `toAccountId`, `toEmail`, `template`, `payload` (JS
 
 ### 6.4 Search and discovery
 
-#### 6.4.1 The cost model that drives this design
+#### 6.4.1 How search works
 
-Saasufy filters a view in **two phases**:
+Saasufy filters a view in two phases: `transformIndex` + `transformIndexOperation`
+narrows the corpus using a real index (one indexed operation per view), then
+`transformFilterQuery` runs as an unindexed filter over what phase 1 returned.
 
-1. **Phase 1 — indexed.** `transformIndex` + `transformIndexOperation` (`equals` or `between`) narrows the corpus using a real index. **One indexed operation per view.**
-2. **Phase 2 — scan.** `transformFilterQuery` is applied to whatever phase 1 returned. It is *not* indexed.
-
-So the cost of a search is essentially **the size of the phase-1 candidate set**. The design goal follows:
-
-> **Search cost must be proportional to the number of clinicians in the searched region and the page size — never to the total number of slots, and never to the whole platform.**
-
-**Why the obvious design fails.** Indexing `TimeSlot` on `startAt` and putting the filters in the phase-2 query looks natural and is quietly O(platform). Date is the *least* selective thing we have: nearly every clinician has slots on any given day, so a date range excludes almost nobody. At ~230 slot rows per clinician over the 60-day horizon:
-
-| Listed clinicians | `TimeSlot` rows | Rows scanned per 7-day search |
-| --- | --- | --- |
-| 100 | 23,000 | ~2,700 |
-| 1,000 | 230,000 | ~27,000 |
-| 10,000 | 2,300,000 | ~270,000 |
-
-Each one then regex-matched to return 20 cards. That is a full scan wearing an index as a hat.
-
-**REQ-SEARCH-1** The search path must not scan `TimeSlot`. Slots are the **booking** corpus; `Clinician` is the **search** corpus. This single decision is worth more than every other optimisation combined, because it replaces ~230 rows per clinician with exactly one.
-
-#### 6.4.2 Two-stage search, no extra collections
-
-> **Facet** — one independent attribute a search can be narrowed by: here region, topic, date, price, language and time-of-day band. Saasufy allows one indexed operation per view, so the design question is which facet that operation should resolve.
-
-**REQ-SEARCH-2 · The search key.** Saasufy indexes `multi` fields **element-wise**, so one array field can act as an index over many values per row. `Clinician.searchKeys` exploits this by storing *pre-joined* lookup keys — one element per way a clinician can be found:
-
-```
-region                    "au-nsw"
-each topic                "naturopathy", "nutrition"
-each region + topic pair  "au-nsw|naturopathy", "au-nsw|nutrition"
-```
-
-A single `equals` lookup on `au-nsw|naturopathy` therefore returns exactly the listed clinicians who are both in NSW and practise naturopathy — the selectivity of a junction table, obtained from one field on the row that already exists.
-
-This is why the collection count stayed at nine. The many-to-many between clinicians and topics is real, but Saasufy resolves it inside the index rather than in a join table.
-
-**REQ-SEARCH-3 · The cap is load-bearing.** `searchKeys` holds `1 + 2N` elements for `N` topics. `Clinician.topics` is therefore capped at **8** (`maxCardinality`), bounding `searchKeys` at 17. This is not a UX nicety — an uncapped array would make the write amplification and index fan-out unbounded. The UI must enforce the cap and the worker must reject profiles that exceed it.
-
-**REQ-SEARCH-4 · Stage 1 — find clinicians.** A view over `Clinician`:
+**`searchView` indexes `listingStatus`.** Phase 1 selects the practitioners an
+admin has marked `listed`; phase 2 filters those on ordinary fields — region,
+topics, price, language, name:
 
 ```json
 {
   "name": "searchView",
-  "paramFields": "searchKey, query, sortBy",
-  "primaryFields": "searchKey",
-  "transformIndex": "searchKeys",
+  "paramFields": "listingStatus,query,sortBy",
+  "primaryFields": "listingStatus",
+  "transformIndex": "listingStatus",
   "transformIndexOperation": "equals",
-  "transformIndexOperationInputA": "$paramFields.searchKey",
+  "transformIndexOperationInputA": "$paramFields.listingStatus",
   "transformFilterType": "advanced",
   "transformFilterQuery": "$paramFields.query",
   "transformOrderByField": "$paramFields.sortBy",
@@ -365,116 +328,84 @@ This is why the collection count stayed at nine. The many-to-many between clinic
 }
 ```
 
-The frontend picks the most selective key the filters allow: region + topic when both are set, otherwise whichever one is. Phase 1 returns one row per matching clinician; phase 2 filters the remainder — date window, price, language, name.
+**REQ-SEARCH-1 · One field controls visibility.** Setting `listingStatus` to
+`listed` puts a practitioner in search immediately; setting it to anything else
+removes them immediately. There is nothing derived to rebuild and no window in
+which the index disagrees with the record.
 
-| Listed clinicians | Phase-1 rows, region + topic | vs. region alone | vs. slot-indexed |
-| --- | --- | --- | --- |
-| 1,000 | ~45 | ~300 | ~27,000 |
-| 10,000 | ~450 | ~3,000 | ~270,000 |
+**REQ-SEARCH-2 · No derived search fields.** The query runs against the fields
+practitioners actually edit (`region`, `country`, `topics`, `priceAmount`,
+`languages`, `displayName`). Case-insensitive matching uses the query language's
+`(?i)` prefix rather than a lowercased duplicate of each field.
 
-Because phase 1 is now genuinely selective, **phase 2 no longer has to be cheap**, which removes the need for a compound index and for date to participate in the indexed operation at all. Filtering a few hundred rows on `nextAvailableAt`, price and language is free. This is the main practical gain from element-wise indexing: it collapses two earlier open questions rather than merely speeding things up.
+**REQ-SEARCH-3 · Filters compose the phase-2 query.** Controls are
+`input-provider` elements whose values are query fragments — `region = nsw`,
+`topics contains (?i)naturopathy` — fed to `collection-view-params`. Query syntax
+is whitespace-strict (exactly one space between terms), so it must be built by a
+single tested helper rather than concatenated ad hoc.
 
-**REQ-SEARCH-5 · Online-first ordering.** Consultations are video-only, so region is a *preference* (timezone, language, practitioner jurisdiction), not a hard requirement — topic-only search is expected to be the dominant query shape. The key set supports it directly, and the UI must not force a region before results are shown.
+**REQ-SEARCH-4 · An empty query is valid** and returns every listed practitioner.
 
-**REQ-SEARCH-6 · Stage 2 — fetch that clinician's slots.** Each rendered card contains a nested `<collection-viewer>` over `TimeSlot` using `clinicianRangeView`: a `between` over the compound index `(clinicianId, startAt)`, where **both bounds bind both components of the key**:
+**REQ-SEARCH-5 · Slots are fetched per result.** Each rendered card queries
+`TimeSlot` by `clinicianId` for its availability, so the search corpus stays one
+row per practitioner.
+
+**REQ-SEARCH-6 · Sorting and pagination.** `transformOrderByField` takes a client
+supplied `sortBy`; `maxOffset` is capped at 500 and the UI refines filters rather
+than paging deeply. `auto-reset-page-offset` returns to offset 0 when a filter
+changes.
+
+**REQ-SEARCH-7 · Realtime scope.** `collection-view-primary-fields` is
+`listingStatus`, so the view's realtime channel covers listed practitioners.
+
+#### 6.4.2 What this trades away
+
+`listingStatus` is deliberately low-cardinality, which is the one rule this design
+breaks: phase 1 returns *every* listed practitioner and phase 2 scans them. Cost
+is therefore proportional to the size of the listed directory rather than to the
+number of matches.
+
+That is the right trade at this stage — the directory is small, and correctness
+and simplicity matter more than a scan that is measured in hundreds of rows. It
+stops being the right trade somewhere in the low tens of thousands of listed
+practitioners, and the signal will be search latency rising with directory size
+rather than with result count.
+
+**The escape hatch, when that day comes:** add a single indexed `multi` field
+holding pre-joined lookup keys (`au-nsw`, `naturopathy`, `au-nsw|naturopathy`),
+since Saasufy indexes `multi` fields element-wise, and point `transformIndex` at
+it. That makes phase 1 proportional to matches. It also reintroduces derived data
+that must be kept in sync with every profile edit — which is precisely the
+complexity being removed here, and why it is deferred until the numbers justify
+it rather than adopted up front.
+
+#### 6.4.3 Who may change the listing status
+
+`Clinician` carries a `groupId` pinned to the admin group by `defaultValue`, with
+the field create- and update-blocked for clients so a practitioner cannot repoint
+it. The model then declares **two** auth pairs for read and update:
 
 ```
-transformIndex:                clinicianIdStartAt          // (clinicianId, startAt)
-transformIndexOperation:       between
-transformIndexOperationInputA: $paramFields.clinicianId,$paramFields.fromAt
-transformIndexOperationInputB: $paramFields.clinicianId,$paramFields.toAt
+accessTokenAuthField / accessModelAuthField              = accountId / accountId
+accessReadTokenAuthField / accessReadModelAuthField      = groupMemberships / groupId
+accessUpdateTokenAuthField / accessUpdateModelAuthField  = groupMemberships / groupId
 ```
 
-The date range is therefore resolved *in the index*, not by a phase-2 scan: the lookup walks only that clinician's slots inside the window. ~20 such lookups per result page, bounded by page size and independent of platform size. UI shape and index shape agree.
+An action-specific pair is an **alternative** to the general pair, not a
+replacement — for a given action, access is granted if *either* matches. So a
+practitioner continues to edit their own profile via `accountId`, and a member of
+the admin group can edit any profile via `groupId`. The same applies to read,
+which means reviewers can also see the fields marked field-level `restrict`
+(`contactEmail`, payout details) that were previously owner-only.
 
-> **The composite bound is the whole trick.** Supplying only the trailing component (`inputA: $paramFields.fromAt`) leaves the leading component unbound and the view returns **zero rows, silently**. Both inputs must name every component of the compound key, in index order — four parameter references across the two inputs for a two-field index. See §6.4.8.
+**REQ-LIST-1** A reviewer sets `listingStatus` from the admin screen; the change
+takes effect in search immediately (§6.4.1).
 
-**REQ-SEARCH-7 · Date precision.** `nextAvailableAt` answers "has an opening before the end of your window", not "has an opening *inside* it", so a clinician free tomorrow but not during the month you asked about passes phase 1. Stage 2 resolves it exactly: a card whose nested slot viewer returns nothing is not rendered, and the frontend over-fetches stage 1 modestly to keep pages full.
-
-**REQ-SEARCH-8 · Headroom.** When a region grows dense, city-level keys (`au-nsw-sydney|naturopathy`) are appended to `searchKeys`. That raises the cap and the write cost but is a **value change, not a schema change** — no new collection, no new index. This is why keys are opaque joined strings rather than separate indexed columns.
-
-#### 6.4.3 Keeping unlisted clinicians out without a separate table
-
-**REQ-SEARCH-9** `searchKeys` is populated **only** while `listingStatus = 'listed'`, and cleared when a clinician is suspended, incomplete, or has no future availability. An `equals` lookup on a real key never matches an empty array, so unlisted clinicians are invisible to search while living in the same collection as everyone else.
-
-This is the sparse-index property that would otherwise justify a dedicated search table — obtained from one field. `searchKeys` is worker-owned and must be recomputed whenever listing eligibility, region or topics change.
-
-**REQ-SEARCH-10 · Do not index low-cardinality fields.** No index on `listingStatus`, `active`, `status` or any boolean; a two-bucket index excludes nothing. Liveness is expressed as presence in the key set, not as an indexed flag.
-
-#### 6.4.4 Query shapes that cannot be indexed
-
-**REQ-SEARCH-11 · Name search.** `searchName contains (?i)smith` is a regex scan and is not indexable by any arrangement of the above. It runs as a phase-2 filter over `Clinician` — one row per clinician, the smallest corpus in the system — which is acceptable at MVP scale. If it stops being acceptable, the fix is an indexed `searchNamePrefix` field (first three characters, `equals`), not a bigger scan.
-
-**REQ-SEARCH-12 · The unfiltered search** has no key at all, so it cannot use `searchView`. It is served by a second view over `Clinician` indexed on `nextAvailableAt`, ordered ascending with a small page size — a cheap ordered index walk. An empty search must return results, never an error.
-
-**REQ-SEARCH-13 · Sorting.** Ordering outside the indexed key forces a sort over the candidate set. With phase 1 now returning a few hundred rows at most, price and rating sorts are affordable on any keyed search. Default sort is `nextAvailableAt`.
-
-**REQ-SEARCH-14 · Pagination.** `maxOffset` capped at 500; the UI uses "load more" plus filter refinement rather than deep page numbers. `auto-reset-page-offset` returns to offset 0 whenever a filter changes.
-
-#### 6.4.5 Realtime fan-out is a performance concern too
-
-**REQ-SEARCH-15** `collection-view-primary-fields` must be `searchKey`. Primary fields determine the realtime channel: keyed on a date, every visitor searching the same day shares one channel and is re-rendered by every booking made anywhere on the platform that day. Keyed on region + topic, a booking for a Perth nutritionist never disturbs someone browsing Sydney naturopaths. Same selectivity argument applied to subscriptions instead of queries — and getting it wrong degrades the whole service under load, not one query.
-
-**REQ-SEARCH-16** Outer viewers declare minimum `collection-fields` and delegate volatile values to nested `<model-text>`, so a changing slot count does not re-render the result list.
-
-#### 6.4.6 Index inventory
-
-Nine collections, eight indexes, no index-only collections.
-
-Saasufy names an index canonically after its fields, so index names below are the names it assigns. Views that need a range use a **compound** index with both key components bound in each bound (§6.4.8); the rest use `equals` on a single field.
-
-| Collection | Index | Serves |
-| --- | --- | --- |
-| `Clinician` | `searchKeys` (`multi`, element-wise) | Faceted search (stage 1) |
-| `Clinician` | `nextAvailableAt` | Unfiltered browse, "soonest" sort |
-| `Clinician` | `accountId` | Dashboard |
-| `TimeSlot` | `clinicianIdStartAt` (`clinicianId, startAt`) | Stage 2; clinician's own calendar |
-| `TimeSlot` | `appointmentId` | Booking lookups |
-| `Appointment` | `patientAccountIdStartAt` (`patientAccountId, startAt`) | Patient's appointments |
-| `Appointment` | `clinicianAccountIdStartAt` (`clinicianAccountId, startAt`) | Clinician's appointments |
-| `Appointment` | `statusStartAt` (`status, startAt`) | Worker reconciliation sweeps (REQ-ARCH-8) |
-| `Credential` | `clinicianId`, `reviewStatus` | Profile display; admin review queue |
-| `Availability` | `clinicianId` | Slot materialisation |
-| `Attendance` | `appointmentId` | Dispute lookups |
-| `Review` | `clinicianId`, `appointmentId` | Profile ratings |
-| `Email` | `status`, `dedupeKey` | Worker queue drain; send deduplication |
-| `Topic` | `slug`, `kind` | Vocabulary pickers |
-
-`statusStartAt` leads with a low-cardinality field, contrary to REQ-SEARCH-10, but the compound key rescues it: the worker's sweep binds a status *and* a time window, so it walks only the due records within that status rather than the whole bucket.
-
-**REQ-SEARCH-17 · Maintenance.** Two derived values need upkeep on `Clinician`: `searchKeys` and `nextAvailableAt`. The worker recomputes them whenever a slot is booked, cancelled, materialised or expires, and whenever listing eligibility, region or topics change. A topic or region edit rewrites the whole `searchKeys` array — it is replaced, never patched. Both are recomputable from `TimeSlot` + `Clinician` alone, and a `rebuild-search-fields` command must exist from day one. Two fields on an existing row is a far smaller consistency obligation than a derived collection, which is the main argument for this design — not the collection count.
-
-**REQ-SEARCH-18** The frontend composes the phase-2 query from the residual filters, e.g. `nextAvailableAt <= 1790000000000 ~AND~ priceAmount <= 15000`. Query syntax is whitespace-strict — exactly one space between terms — so it must be built by a single tested helper function, never string-concatenated ad hoc across the UI.
-
-**REQ-SEARCH-19** Filter controls are `<input-provider>` elements feeding an `<input-combiner>` which feeds `collection-view-params`. The combiner is where `searchKey` is assembled from the region and topic pickers, applying the most-selective-key rule of REQ-SEARCH-4.
-
-**REQ-SEARCH-20** Supported filters: free-text name, topic (specialisation or ailment), country/region, date range, time-of-day band, max price, language. Sort: soonest available (default), price ascending, rating descending.
-
-**REQ-SEARCH-21** All times are rendered in the **patient's** browser timezone, with the clinician's timezone shown alongside on the profile and confirmation screens.
-
-#### 6.4.7 Open technical questions
-
-Element-wise `multi` indexing and the `equals` + phase-2-range pattern are **both verified against the deployed service** (§6.4.8). What remains:
-
-| # | To verify | Fallback |
-| --- | --- | --- |
-| V-1 | Practical `maxCardinality` ceiling for one `searchKeys` value in a dense region+topic bucket | Subdivide to city-level keys (REQ-SEARCH-8) — already the planned escape hatch |
-| V-2 | Whether `$paramFields` in `transformOrderByField` permits a client-chosen sort direction | Define one view per sort option |
-| V-3 | Write cost of replacing a 17-element indexed `multi` array on every profile edit | Debounce rebuilds; the 60-second window of REQ-PROF-3 already permits it |
-| V-4 | Whether the worker's service credential can read fields marked `accessRead: block` (the Pin/Zoom/meeting tokens). If it cannot, those fields must relax to `restrict` and the tokens be held outside Saasufy | Hold tokens only in the worker's own store and keep Saasufy free of them |
-
-#### 6.4.8 Verified Saasufy behaviour
-
-Established empirically against `sid8016` while building the schema. These are platform facts, not preferences, and each one invalidated an earlier assumption in this document:
-
-1. **`multi` fields are indexed element-wise.** A single `equals` lookup on one element of `searchKeys` returns exactly the rows containing it. This is the foundation of §6.4.2 and it works.
-2. **`multi` values are comma-separated strings over the HTTP API**, not JSON arrays. Posting an array is rejected with *"Value must be a string"*. Keys must therefore never contain a comma — the `|` separator in `au-nsw|naturopathy` is deliberate.
-3. **Compound-index `between` works, but both bounds must bind every component of the key.** For an index `(clinicianId, startAt)` the inputs are `$paramFields.clinicianId,$paramFields.fromAt` and `$paramFields.clinicianId,$paramFields.toAt` — the leading component is repeated in both bounds, giving four parameter references for a two-field index. Supplying only the trailing component leaves the leading one unbound and the view returns **zero rows with no error**, which is the single easiest way to build a silently dead view on this platform.
-4. **`between` is half-open: `[fromAt, toAt)`.** The lower bound is inclusive, the upper exclusive — verified at millisecond granularity. A window built as "midnight to midnight" therefore drops a record landing exactly on the closing instant; callers must pass `toAt = end + 1` to include it. Every date-range caller in the worker and frontend must apply this consistently.
-5. **A `paramField` that matches a field name does not filter by itself.** It must be consumed by an index input or appear in the phase-2 query, or it is silently ignored — the failure mode is *too many* rows, not an error. A `startAt`-only `between` with `clinicianId` merely declared as a param returns every clinician's slots.
-6. **Saasufy renames index records canonically after their fields** (`clinicianStartIndex` → `clinicianIdStartAt`) on deploy, and auto-creates an index for any field a view references. A view pointing at a custom index name is therefore left dangling after deployment, and Saasufy will create a placeholder index over a **nonexistent field** to satisfy it — which silently indexes nothing. Always name indexes after their fields.
-7. **Listing endpoints paginate at 10 by default.** Any tooling that enumerates fields, indexes or views must page, or it will silently operate on a partial schema.
-8. **An empty `multi` field matches no `equals` lookup**, which is what makes the sparse-index trick of REQ-SEARCH-9 work: unlisted clinicians carry an empty `searchKeys` and are invisible to every search.
+**REQ-LIST-2** Admin-group membership grants edit rights over the *whole*
+`Clinician` record, not just `listingStatus`. Field-level `restrict` reuses the
+same per-action check, so a single field cannot be given a narrower owner than the
+rest of the record. If one field ever needs to be admin-only while the rest stay
+owner-editable, it has to move to its own model.
 
 ### 6.5 Booking and payment
 
@@ -660,8 +591,7 @@ In-person appointments · multi-currency · recurring appointment packages · in
 | **DST / timezone errors** in slot materialisation | High — missed appointments | IANA-timezone-aware expansion; explicit DST test cases as a release blocker |
 | **Regulatory exposure** from health data and clinical claims | High | Field-level access control on intake data; explicit introduction-service positioning (REQ-NFR-10); legal review before launch |
 | **Saasufy query syntax is whitespace-strict** | Medium — silent wrong results | Single tested query-builder helper (REQ-SEARCH-18) |
-| **`searchKeys` / `nextAvailableAt` drift** out of sync with actual slots | Medium — clinicians silently vanish from search, or appear with no slots | Idempotent recomputation and a mandatory `rebuild-search-fields` command (REQ-SEARCH-17); periodic reconciliation sweep |
-| **Search degrades as the marketplace grows** | High — the failure is gradual and easy to miss until it is expensive | Two-stage search on an element-wise-indexed composite key (§6.4), with city-level subdivision as the escape hatch; load-test at 10× projected clinician count before launch |
+| **Search degrades as the marketplace grows** | Medium — accepted deliberately; the scan is proportional to the listed directory (§6.4.2) | Revisit at low tens of thousands of listed practitioners; the escape hatch is an indexed `multi` key field, documented in §6.4.2 |
 | **Pin balance too low to refund** — refunds and clinician transfers draw on the same balance and Pin returns 402 | High — a patient owed a refund does not get one | Retain a working float (REQ-PAY-3); treat 402 as retryable and alert; never sweep the balance to zero |
 | **Manual settlement schedule not set** in the Pin dashboard | High — every payout fails silently at launch | Launch checklist item (REQ-PAY-1); worker logs a loud startup warning if the balance is repeatedly zero |
 | **We hold clinicians' funds** in our own merchant balance, and we perform their KYC | High — financial-services and fraud exposure | Minimise hold time (REQ-PAY-6); manual identity check at credential review (REQ-CLIN-6); legal sign-off on D-8 before launch |

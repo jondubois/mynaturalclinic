@@ -108,6 +108,7 @@ def field_access(model_id, mapping):
     print(f'    field-access: {len(mapping)}')
 
 S, N, B = 'string', 'number', 'boolean'
+ADMIN_GROUP_ID = '620af869-cb09-4a20-bcf4-ed10510b3367'   # the 'admin' Group record; see README
 OWNER = {'accessTokenAuthField': 'accountId', 'accessModelAuthField': 'accountId'}
 
 print('== Topic ==')
@@ -131,19 +132,50 @@ views(m, [
      'transformOrderByField': 'name'},
 ])
 
+print('== Account (Saasufy auth table) ==')
+# The Account table is created and populated by Saasufy's auth layer on every
+# successful login — clients can never create records in it. Declaring the Model,
+# its fields and its indexes only *exposes* the existing table to this service and
+# to frontend components. Saasufy applies safer defaults because of the name:
+# accessModelAuthField="id" (there is no accountId field — ownership is the record's
+# own id) and accessRead="restrict". Do not override those, and do not put
+# constraints on the standard fields: the service validates them already and a
+# stricter constraint (e.g. required on email) can break logins.
+m = model('Account', -1)
+fields(m, 'Account', [
+    {'name': 'id', 'type': S},
+    {'name': 'username', 'type': S},
+    {'name': 'email', 'type': S},
+    {'name': 'authSource', 'type': S},
+    {'name': 'lastWalletBalance', 'type': N},
+    {'name': 'lastIpAddress', 'type': S},
+    {'name': 'isDeactivated', 'type': B},
+    {'name': 'createdAt', 'type': N},
+    {'name': 'updatedAt', 'type': N},
+])
+indexes(m, [{'name': 'username', 'fields': 'username'},
+            {'name': 'email', 'fields': 'email'}])
+
 print('== Clinician ==')
+# An action-specific auth pair is an ALTERNATIVE to the general pair, not a
+# replacement: for a given action access is granted if either matches. So read and
+# update succeed when the token's accountId matches the record owner OR the token's
+# groupMemberships contains the record's groupId. Practitioners keep editing their
+# own profile; admin-group members can edit any profile and can see the fields that
+# are field-level `restrict` (contactEmail, payout details), because field-level
+# restrict reuses the same check.
 m = model('Clinician', 2, accessCreate='restrict', accessRead='allow',
-          accessUpdate='restrict', accessDelete='block', **OWNER)
+          accessUpdate='restrict', accessDelete='block',
+          accessReadTokenAuthField='groupMemberships', accessReadModelAuthField='groupId',
+          accessUpdateTokenAuthField='groupMemberships', accessUpdateModelAuthField='groupId',
+          **OWNER)
 fields(m, 'Clinician', [
     {'name': 'accountId', 'type': S, 'required': True},
     {'name': 'displayName', 'type': S, 'max': 120},
-    {'name': 'searchName', 'type': S, 'max': 120, 'lowercase': True},
     {'name': 'professionalTitle', 'type': S, 'max': 120},
     {'name': 'bio', 'type': S, 'max': 5000},
     {'name': 'photo', 'type': S, 'blob': True},
     {'name': 'topics', 'type': S, 'multi': True, 'maxCardinality': 8},
-    {'name': 'searchTags', 'type': S, 'max': 2000, 'lowercase': True},
-    {'name': 'searchKeys', 'type': S, 'multi': True, 'maxCardinality': 17},
     {'name': 'country', 'type': S, 'max': 2, 'lowercase': True},
     {'name': 'region', 'type': S, 'max': 60, 'lowercase': True},
     {'name': 'city', 'type': S, 'max': 120},
@@ -152,7 +184,6 @@ fields(m, 'Clinician', [
     {'name': 'consultationMinutes', 'type': N, 'integer': True, 'min': 15, 'max': 180},
     {'name': 'priceAmount', 'type': N, 'integer': True, 'min': 0},
     {'name': 'priceCurrency', 'type': S, 'max': 3, 'uppercase': True, 'defaultValue': 'AUD'},
-    {'name': 'nextAvailableAt', 'type': N, 'defaultValue': '0'},
     {'name': 'listingStatus', 'type': S, 'enum': 'draft,pending_review,listed,suspended',
      'defaultValue': 'draft'},
     {'name': 'contactEmail', 'type': S, 'email': True},
@@ -163,23 +194,25 @@ fields(m, 'Clinician', [
     {'name': 'emailVerified', 'type': B, 'defaultValue': 'false'},
     {'name': 'ratingAverage', 'type': N, 'defaultValue': '0'},
     {'name': 'ratingCount', 'type': N, 'integer': True, 'defaultValue': '0'},
+    {'name': 'groupId', 'type': S, 'defaultValue': ADMIN_GROUP_ID,
+     'accessCreate': 'block', 'accessUpdate': 'block'},
 ])
 indexes(m, [
-    {'name': 'searchKeys', 'fields': 'searchKeys'},
-    {'name': 'nextAvailableAt', 'fields': 'nextAvailableAt'},
+    {'name': 'listingStatus', 'fields': 'listingStatus'},
     {'name': 'accountId', 'fields': 'accountId'},
 ])
+# Search is keyed on listingStatus itself. Flipping that one field puts a
+# practitioner into or out of the view immediately, with nothing derived to keep
+# in sync. Region/topic/price filtering happens in the second-phase query over
+# ordinary fields.
 views(m, [
-    {'name': 'searchView', 'paramFields': 'searchKey,query,sortBy',
-     'primaryFields': 'searchKey',
-     'transformIndex': 'searchKeys', 'transformIndexOperation': 'equals',
-     'transformIndexOperationInputA': '$paramFields.searchKey',
+    {'name': 'searchView', 'paramFields': 'listingStatus,query,sortBy',
+     'primaryFields': 'listingStatus',
+     'transformIndex': 'listingStatus', 'transformIndexOperation': 'equals',
+     'transformIndexOperationInputA': '$paramFields.listingStatus',
      'transformFilterType': 'advanced', 'transformFilterQuery': '$paramFields.query',
      'transformOrderByField': '$paramFields.sortBy', 'maxOffset': 500,
-     'affectingFields': 'nextAvailableAt,priceAmount,ratingAverage,searchTags'},
-    {'name': 'browseView', 'paramFields': 'query', 'primaryFields': '',
-     'transformFilterType': 'advanced', 'transformFilterQuery': '$paramFields.query',
-     'transformOrderByField': 'nextAvailableAt', 'maxOffset': 500},
+     'affectingFields': 'displayName,region,country,topics,priceAmount,listingStatus'},
     {'name': 'accountView', 'paramFields': 'accountId', 'primaryFields': 'accountId',
      'transformIndex': 'accountId', 'transformIndexOperation': 'equals',
      'transformIndexOperationInputA': '$paramFields.accountId'},
@@ -191,9 +224,38 @@ field_access(m, {
     'payoutStatus':       {'accessRead': 'restrict'},
 })
 
+print('== Group / GroupMembership ==')
+# Built-in models. Their schema is auto-extended on deploy; the access settings
+# below are the ones the control panel applies. Only a group's owner may add
+# members to it (enforced by the service, not by these flags).
+m = model('Group', -2, accessTokenAuthField='accountId', accessModelAuthField='accountId',
+          accessCreate='restrict', accessRead='allow',
+          accessUpdate='restrict', accessDelete='restrict')
+fields(m, 'Group', [
+    {'name': 'name', 'type': S},
+    {'name': 'accountId', 'type': S},
+    {'name': 'isDeactivated', 'type': B},
+])
+m = model('GroupMembership', -3, accessTokenAuthField='groupOwnerships',
+          accessModelAuthField='groupId', accessCreate='restrict', accessRead='allow',
+          accessUpdate='restrict', accessDelete='restrict')
+fields(m, 'GroupMembership', [
+    {'name': 'groupId', 'type': S},
+    {'name': 'accountId', 'type': S},
+])
+
 print('== Credential ==')
+# Read and update of the sensitive parts are gated on membership of the admin
+# group; create and delete stay with the owning practitioner. groupId carries the
+# admin group id via defaultValue and is create/update-blocked for clients, so a
+# practitioner cannot repoint it at a group they own and approve themselves.
 m = model('Credential', 3, accessCreate='restrict', accessRead='allow',
-          accessUpdate='restrict', accessDelete='restrict', **OWNER)
+          accessUpdate='restrict', accessDelete='restrict',
+          accessReadTokenAuthField='groupMemberships', accessReadModelAuthField='groupId',
+          accessUpdateTokenAuthField='groupMemberships', accessUpdateModelAuthField='groupId',
+          accessCreateTokenAuthField='accountId', accessCreateModelAuthField='accountId',
+          accessDeleteTokenAuthField='accountId', accessDeleteModelAuthField='accountId',
+          **OWNER)
 fields(m, 'Credential', [
     {'name': 'accountId', 'type': S, 'required': True},
     {'name': 'clinicianId', 'type': S, 'required': True},
@@ -207,6 +269,8 @@ fields(m, 'Credential', [
      'defaultValue': 'pending'},
     {'name': 'reviewNote', 'type': S, 'max': 2000},
     {'name': 'reviewedAt', 'type': N},
+    {'name': 'groupId', 'type': S, 'defaultValue': ADMIN_GROUP_ID,
+     'accessCreate': 'block', 'accessUpdate': 'block'},
 ])
 indexes(m, [{'name': 'clinicianId', 'fields': 'clinicianId'},
             {'name': 'accountId', 'fields': 'accountId'}])
@@ -226,9 +290,14 @@ views(m, [
      'transformOrderByField': 'createdAt'},
 ])
 field_access(m, {
-    'document':           {'accessRead': 'restrict'},
-    'registrationNumber': {'accessRead': 'restrict'},
-    'reviewNote':         {'accessRead': 'restrict'},
+    # Documents are world-readable by design: the app only surfaces a link once a
+    # credential is approved, but the URL is derivable from the credential id,
+    # which Credential.accessRead='allow' already exposes. Do not put anything in
+    # here that must stay private.
+    'document':           {'accessRead': 'allow'},
+    'registrationNumber': {'accessRead': 'restrict'},   # admin group only
+    'reviewNote':         {'accessRead': 'allow'},      # addressed to the practitioner
+    'reviewStatus':       {'accessRead': 'allow'},
 })
 
 print('== Availability ==')
