@@ -9,6 +9,7 @@
 <script src="https://saasufy.com/node_modules/saasufy-components/socket.js" type="module" defer></script>
 <script src="https://saasufy.com/node_modules/saasufy-components/app-router.js" type="module" defer></script>
 <script src="https://saasufy.com/node_modules/saasufy-components/collection-viewer.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/collection-reducer.js" type="module" defer></script>
 <script src="https://saasufy.com/node_modules/saasufy-components/collection-adder-form.js" type="module" defer></script>
 <script src="https://saasufy.com/node_modules/saasufy-components/collection-deleter.js" type="module" defer></script>
 <script src="https://saasufy.com/node_modules/saasufy-components/model-viewer.js" type="module" defer></script>
@@ -371,17 +372,43 @@
 
         <div class="card">
           <div class="toolbar">
+            <!-- The select is rendered immediately with 'Everyone' hardcoded and
+                 selected, so there is no wait and nothing shifts. The reducer below
+                 loads SearchCategory once and replaces the options attribute in
+                 place, appending the rest of the list after 'Everyone'. -->
             <input-provider
+              class="category-select"
               type="select"
-              options="Everyone=,New South Wales=region {{'='}} nsw,Victoria=region {{'='}} vic,Naturopathy=topics contains (?i)naturopathy,Nutrition=topics contains (?i)nutrition,Acupuncture=topics contains (?i)acupuncture"
+              options="Everyone="
               value=""
+              skip-init-change
               consumers=".search-results:collection-view-params"
               provider-template="listingStatus=listed,query={{value}},sortBy=displayName"
             ></input-provider>
+
+            <collection-reducer
+              collection-type="SearchCategory"
+              collection-fields="label,query,position"
+              collection-view="orderedView"
+              collection-view-params=""
+              collection-page-size="100"
+            >
+              <template slot="item">
+                <input-provider
+                  type="text"
+                  style="display:none"
+                  value="{{SearchCategory.map(c => c.label + '=' + c.query).join(',')}}"
+                  consumers=".category-select:options"
+                  provider-template="Everyone=,{{value}}"
+                ></input-provider>
+              </template>
+              <div slot="viewport"></div>
+            </collection-reducer>
           </div>
           <div class="small muted" style="margin-bottom:10px">
             The view is indexed on <code>listingStatus</code>; each option supplies the
-            second-phase filter query over ordinary fields.
+            second-phase filter query over ordinary fields. Options come from the
+            <code>SearchCategory</code> collection — adding one is a data change, not a code change.
           </div>
 
           <collection-viewer

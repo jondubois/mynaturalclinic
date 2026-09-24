@@ -156,6 +156,23 @@ fields(m, 'Account', [
 indexes(m, [{'name': 'username', 'fields': 'username'},
             {'name': 'email', 'fields': 'email'}])
 
+print('== SearchCategory ==')
+# Drives the /browse dropdown. Each row pairs the label a patient sees with the
+# phase-2 filter query it applies to searchView, so adding a category is a data
+# change rather than a code change. Seeded by seed-search-categories.py.
+m = model('SearchCategory', 10, accessCreate='block', accessRead='allow',
+          accessUpdate='block', accessDelete='block')
+fields(m, 'SearchCategory', [
+    {'name': 'label', 'type': S, 'max': 100},
+    {'name': 'query', 'type': S, 'max': 300},
+    {'name': 'kind', 'type': S, 'enum': 'region,specialisation,ailment'},
+    {'name': 'position', 'type': N, 'integer': True},
+])
+views(m, [
+    {'name': 'orderedView', 'paramFields': '', 'primaryFields': '',
+     'transformOrderByField': 'position'},
+])
+
 print('== Clinician ==')
 # An action-specific auth pair is an ALTERNATIVE to the general pair, not a
 # replacement: for a given action access is granted if either matches. So read and
