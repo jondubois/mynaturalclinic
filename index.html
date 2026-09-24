@@ -226,6 +226,21 @@
   .sechead h2{margin:0}
   .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
   .toolbar > *{flex:1;min-width:150px}
+  /* collection-viewer renders previous-page / page-number / next-page as
+     consecutive slots. It sets and clears `disabled` on the buttons itself and
+     writes the page number into the slotted element, so this is layout only. */
+  /* The pager slots sit directly in the component's shadow flow, after the
+     viewport, so centring is done on the host and undone on the viewport (all
+     rendered rows, loader, empty and error states live inside that). */
+  collection-viewer.search-results{display:block;text-align:center}
+  /* Fixed height for the results area so the pager keeps its position whether a
+     page holds ten rows or two. */
+  collection-viewer.search-results > [slot=viewport]{text-align:left;min-height:300px}
+  .pager-btn{margin-top:14px}
+  .pager-btn[disabled]{opacity:.45;cursor:default}
+  .pager-btn[disabled]:hover{background:var(--surface);color:var(--text)}
+  .pager-num{display:inline-block;margin:14px 10px 0;color:var(--muted);
+    font-size:.86rem;min-width:1.5em;text-align:center}
 </style>
 </head>
 <body>
@@ -494,6 +509,9 @@
             <template slot="loader"><div class="spin">Searching…</div></template>
             <template slot="error"><div class="err">{{$Clinician.error.message}}</div></template>
             <div slot="viewport"></div>
+            <input slot="previous-page" class="btn sec pager-btn" type="button" value="Previous">
+            <div slot="page-number" class="pager-num"></div>
+            <input slot="next-page" class="btn sec pager-btn" type="button" value="Next">
           </collection-viewer>
         </div>
       </div>
