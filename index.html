@@ -395,10 +395,29 @@
               ></input-provider></label>
           </div>
 
+          <div class="toolbar">
+            <label class="f" style="margin:0;flex:1"><span class="lab">Search</span>
+              <!-- Emits a ready-made query fragment, or an empty string when blank so
+                   it drops out of the AND. ~OR1~ binds tighter than the outer ~AND~
+                   (higher number = higher priority), so this reads as
+                   "... AND (name OR title OR city)". Commas are stripped because
+                   collection-view-params is itself comma separated. -->
+              <input-provider
+                name="text"
+                type="text"
+                placeholder="Name, title or city"
+                value=""
+                skip-init-change
+                debounce-delay="400"
+                consumers=".search-combiner"
+                provider-template="{{(function(t){return t ? 'displayName contains (?i)' + t + ' ~OR1~ professionalTitle contains (?i)' + t + ' ~OR1~ city contains (?i)' + t : ''})(value.split(',').join(' ').trim())}}"
+              ></input-provider></label>
+          </div>
+
           <input-combiner
             class="search-combiner"
             consumers=".search-results:collection-view-params"
-            provider-template="listingStatus=listed,query={{(value.region &amp;&amp; value.specialty) ? value.region + ' ~AND~ ' + value.specialty : (value.region || value.specialty || '')}},sortBy=displayName"
+            provider-template="listingStatus=listed,query={{Object.values(value).filter(Boolean).join(' ~AND~ ')}},sortBy=displayName"
           ></input-combiner>
 
             <collection-reducer
