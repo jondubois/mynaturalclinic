@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Seed the SearchCategory table that populates the /browse dropdown.
+"""Seed the SearchCategory table that populates the /browse dropdowns.
 
-Each row carries the label a patient sees and the phase-2 filter query it applies
-to searchView. Adding a category is a data change, not a code change.
+Categories are levelled: level 1 is where the practitioner is, level 2 is what
+they treat. Each level drives its own select, and the two are combined into a
+single filter query. Each row carries the label a patient sees and the phase-2
+query fragment it contributes, so adding a category is a data change, not a code
+change.
 """
 import json, urllib.request, os
 
@@ -36,13 +39,13 @@ AILMENTS = [('Anxiety','anxiety'), ('Digestive Health','digestive-health'),
             ('Hormonal Health','hormonal-health'), ('Chronic Pain','chronic-pain'),
             ('Skin Conditions','skin-conditions'), ('Immune Support','immune-support')]
 
-rows = []
+rows = []   # (label, query, kind, position, level)
 for i, (label, slug) in enumerate(REGIONS):
-    rows.append((label, f'region = {slug}', 'region', 10 + i))
+    rows.append((label, f'region = {slug}', 'region', 10 + i, 1))
 for i, (label, slug) in enumerate(SPECIALISATIONS):
-    rows.append((label, f'topics contains (?i){slug}', 'specialisation', 100 + i))
+    rows.append((label, f'topics contains (?i){slug}', 'specialisation', 100 + i, 2))
 for i, (label, slug) in enumerate(AILMENTS):
-    rows.append((label, f'topics contains (?i){slug}', 'ailment', 200 + i))
+    rows.append((label, f'topics contains (?i){slug}', 'ailment', 200 + i, 2))
 
 removed = 0
 while True:
@@ -53,11 +56,13 @@ while True:
         removed += 1
 print(f'removed {removed} existing categor(ies)')
 
-for label, query, kind, position in rows:
+for label, query, kind, position, level in rows:
     assert ',' not in label and ':' not in label, f'bad label: {label}'
     r = call('POST', 'SearchCategory',
-             {'label': label, 'query': query, 'kind': kind, 'position': position})
+             {'label': label, 'query': query, 'kind': kind,
+              'position': position, 'level': level})
     if str(r).startswith('ERR'):
         print(' ', label, r)
-print(f'seeded {len(rows)} categories '
-      f'({len(REGIONS)} regions, {len(SPECIALISATIONS)} specialisations, {len(AILMENTS)} ailments)')
+print(f'seeded {len(rows)} categories: '
+      f'level 1 = {len(REGIONS)} regions, '
+      f'level 2 = {len(SPECIALISATIONS)} specialisations + {len(AILMENTS)} ailments')

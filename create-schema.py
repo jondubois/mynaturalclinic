@@ -167,9 +167,16 @@ fields(m, 'SearchCategory', [
     {'name': 'query', 'type': S, 'max': 300},
     {'name': 'kind', 'type': S, 'enum': 'region,specialisation,ailment'},
     {'name': 'position', 'type': N, 'integer': True},
+    # 1 = where the practitioner is, 2 = what they treat. Each level drives its
+    # own select; the two fragments are combined with ~AND~ in the frontend.
+    {'name': 'level', 'type': N, 'integer': True},
 ])
 views(m, [
     {'name': 'orderedView', 'paramFields': '', 'primaryFields': '',
+     'transformOrderByField': 'position'},
+    {'name': 'levelView', 'paramFields': 'level', 'primaryFields': 'level',
+     'transformIndex': 'level', 'transformIndexOperation': 'equals',
+     'transformIndexOperationInputA': '$paramFields.level',
      'transformOrderByField': 'position'},
 ])
 

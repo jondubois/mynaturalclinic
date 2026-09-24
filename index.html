@@ -16,6 +16,7 @@
 <script src="https://saasufy.com/node_modules/saasufy-components/model-input.js" type="module" defer></script>
 <script src="https://saasufy.com/node_modules/saasufy-components/model-text.js" type="module" defer></script>
 <script src="https://saasufy.com/node_modules/saasufy-components/input-provider.js" type="module" defer></script>
+<script src="https://saasufy.com/node_modules/saasufy-components/input-combiner.js" type="module" defer></script>
 <script src="https://saasufy.com/node_modules/saasufy-components/if-group.js" type="module" defer></script>
 <script src="https://saasufy.com/node_modules/saasufy-components/switch-group.js" type="module" defer></script>
 <script src="https://saasufy.com/node_modules/saasufy-components/render-group.js" type="module" defer></script>
@@ -372,25 +373,40 @@
 
         <div class="card">
           <div class="toolbar">
-            <!-- The select is rendered immediately with 'Everyone' hardcoded and
-                 selected, so there is no wait and nothing shifts. The reducer below
-                 loads SearchCategory once and replaces the options attribute in
-                 place, appending the rest of the list after 'Everyone'. -->
-            <input-provider
-              class="category-select"
-              type="select"
-              options="Everyone="
-              value=""
-              skip-init-change
-              consumers=".search-results:collection-view-params"
-              provider-template="listingStatus=listed,query={{value}},sortBy=displayName"
-            ></input-provider>
+            <label class="f" style="margin:0"><span class="lab">Where</span>
+              <input-provider
+                class="cat-level1"
+                name="region"
+                type="select"
+                options="Everywhere="
+                value=""
+                skip-init-change
+                consumers=".search-combiner"
+              ></input-provider></label>
+            <label class="f" style="margin:0"><span class="lab">What they treat</span>
+              <input-provider
+                class="cat-level2"
+                name="specialty"
+                type="select"
+                options="All specialties="
+                value=""
+                skip-init-change
+                consumers=".search-combiner"
+              ></input-provider></label>
+          </div>
+
+          <input-combiner
+            class="search-combiner"
+            consumers=".search-results:collection-view-params"
+            provider-template="listingStatus=listed,query={{(value.region &amp;&amp; value.specialty) ? value.region + ' ~AND~ ' + value.specialty : (value.region || value.specialty || '')}},sortBy=displayName"
+          ></input-combiner>
 
             <collection-reducer
               collection-type="SearchCategory"
               collection-fields="label,query,position"
-              collection-view="orderedView"
-              collection-view-params=""
+              collection-view="levelView"
+              collection-view-params="level=1"
+              collection-view-primary-fields="level"
               collection-page-size="100"
             >
               <template slot="item">
@@ -398,17 +414,37 @@
                   type="text"
                   style="display:none"
                   value="{{SearchCategory.map(c => c.label + '=' + c.query).join(',')}}"
-                  consumers=".category-select:options"
-                  provider-template="Everyone=,{{value}}"
+                  consumers=".cat-level1:options"
+                  provider-template="Everywhere=,{{value}}"
                 ></input-provider>
               </template>
               <div slot="viewport"></div>
             </collection-reducer>
-          </div>
+
+            <collection-reducer
+              collection-type="SearchCategory"
+              collection-fields="label,query,position"
+              collection-view="levelView"
+              collection-view-params="level=2"
+              collection-view-primary-fields="level"
+              collection-page-size="100"
+            >
+              <template slot="item">
+                <input-provider
+                  type="text"
+                  style="display:none"
+                  value="{{SearchCategory.map(c => c.label + '=' + c.query).join(',')}}"
+                  consumers=".cat-level2:options"
+                  provider-template="All specialties=,{{value}}"
+                ></input-provider>
+              </template>
+              <div slot="viewport"></div>
+            </collection-reducer>
           <div class="small muted" style="margin-bottom:10px">
-            The view is indexed on <code>listingStatus</code>; each option supplies the
-            second-phase filter query over ordinary fields. Options come from the
-            <code>SearchCategory</code> collection — adding one is a data change, not a code change.
+            The view is indexed on <code>listingStatus</code>; the two selects each contribute
+            a second-phase filter fragment, combined with <code>~AND~</code>. Options come from
+            the levelled <code>SearchCategory</code> collection — adding one is a data change,
+            not a code change.
           </div>
 
           <collection-viewer
