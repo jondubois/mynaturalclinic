@@ -107,6 +107,51 @@ def field_access(model_id, mapping):
             call('PUT', f'ModelField/{have[nm]}', acc)
     print(f'    field-access: {len(mapping)}')
 
+def _page(kind, params):
+    out, off = [], 0
+    while True:
+        r = call('GET', q(kind, {**params, 'offset': off, 'pageSize': 100}))
+        d = r.get('data', [])
+        out += [call('GET', f'{kind}/{i}') if isinstance(i, str) else i for i in d]
+        if r.get('isLastPage') or not d: break
+        off += len(d)
+    return out
+
+def aggregation(name, target_model_id, source_model_id, **opts):
+    have = {a['aggregationName']: a['id'] for a in _page(
+        'Aggregation', {'view': 'accountModelAlphabeticalView',
+                        'viewParams[modelId]': target_model_id})}
+    if name in have:
+        aid = have[name]
+        # aggregationName, modelId and sourceModelId are frozen after creation.
+        call('PUT', f'Aggregation/{aid}', opts)
+        print(f'  = Aggregation {name}')
+    else:
+        r = call('POST', 'Aggregation', {'aggregationName': name,
+                                         'modelId': target_model_id,
+                                         'sourceModelId': source_model_id, **opts})
+        aid = r['id'] if isinstance(r, dict) else r
+        print(f'  + Aggregation {name}')
+    return aid
+
+def agg_rules(agg_id, kind, key_fields, specs):
+    # A rule's id is derived from its key fields, so those identify it; anything
+    # else (targetField, operand, stringOperand) can be updated in place.
+    have = {tuple(r.get(k) for k in key_fields): r['id'] for r in _page(
+        kind, {'view': 'accountAggregationView', 'viewParams[aggregationId]': agg_id})}
+    for spec in specs:
+        key = tuple(spec.get(k) for k in key_fields)
+        rest = {k: v for k, v in spec.items() if k not in key_fields}
+        if key in have:
+            if rest: call('PUT', f'{kind}/{have[key]}', rest)
+        else:
+            call('POST', kind, {'aggregationId': agg_id, **spec})
+    print(f'    {kind}: {len(specs)}')
+
+def rebuild(agg_id):
+    import time
+    call('PUT', f'Aggregation/{agg_id}', {'rebuildRequestedAt': int(time.time() * 1000)})
+
 S, N, B = 'string', 'number', 'boolean'
 ADMIN_GROUP_ID = '620af869-cb09-4a20-bcf4-ed10510b3367'   # the 'admin' Group record; see README
 OWNER = {'accessTokenAuthField': 'accountId', 'accessModelAuthField': 'accountId'}
@@ -220,6 +265,16 @@ fields(m, 'Clinician', [
     {'name': 'emailVerified', 'type': B, 'defaultValue': 'false'},
     {'name': 'ratingAverage', 'type': N, 'defaultValue': '0'},
     {'name': 'ratingCount', 'type': N, 'integer': True, 'defaultValue': '0'},
+    # Written only by the Availability -> Clinician aggregations at the bottom of
+    # this file. The *Days fields hold the practitioner's weekday numbers joined
+    # with commas ('1,3,5'), which the browse query matches with `contains`.
+    {'name': 'availableDays', 'type': S, 'max': 200},
+    {'name': 'morningDays', 'type': S, 'max': 200},
+    {'name': 'afternoonDays', 'type': S, 'max': 200},
+    {'name': 'eveningDays', 'type': S, 'max': 200},
+    {'name': 'earliestStartMinute', 'type': N, 'integer': True},
+    {'name': 'latestEndMinute', 'type': N, 'integer': True},
+    {'name': 'availabilityCount', 'type': N, 'integer': True},
     {'name': 'groupId', 'type': S, 'defaultValue': ADMIN_GROUP_ID,
      'accessCreate': 'block', 'accessUpdate': 'block'},
 ])
@@ -238,7 +293,9 @@ views(m, [
      'transformIndexOperationInputA': '$paramFields.listingStatus',
      'transformFilterType': 'advanced', 'transformFilterQuery': '$paramFields.query',
      'transformOrderByField': '$paramFields.sortBy', 'maxOffset': 500,
-     'affectingFields': 'displayName,region,country,topics,priceAmount,listingStatus'},
+     'affectingFields': 'displayName,region,country,topics,priceAmount,listingStatus,'
+                        'availableDays,morningDays,afternoonDays,eveningDays,'
+                        'earliestStartMinute,latestEndMinute'},
     {'name': 'accountView', 'paramFields': 'accountId', 'primaryFields': 'accountId',
      'transformIndex': 'accountId', 'transformIndexOperation': 'equals',
      'transformIndexOperationInputA': '$paramFields.accountId'},
@@ -248,6 +305,11 @@ field_access(m, {
     'pinRecipientToken':  {'accessRead': 'restrict'},
     'payoutAccountLast4': {'accessRead': 'restrict'},
     'payoutStatus':       {'accessRead': 'restrict'},
+    # The aggregations own these; a manual edit would be overwritten on the next
+    # cycle anyway, so refuse it outright. The service still writes them.
+    **{f: {'accessCreate': 'block', 'accessUpdate': 'block'} for f in (
+        'availableDays', 'morningDays', 'afternoonDays', 'eveningDays',
+        'earliestStartMinute', 'latestEndMinute', 'availabilityCount')},
 })
 
 print('== Group / GroupMembership ==')
@@ -534,4 +596,54 @@ views(m, [
      'transformIndexOperationInputA': '$paramFields.dedupeKey'},
 ])
 
+print('== Availability -> Clinician aggregations ==')
+# Availability is accessRead='restrict' (a practitioner's own rows only), so the
+# browse page cannot read it and a view cannot join across models. These four
+# pipelines roll each practitioner's weekly blocks up onto their own Clinician
+# record instead, where searchView's second-phase query can filter on them.
+#
+# useGroupAsId makes the group value (clinicianId) the target record id, which is
+# what lands the result on the matching Clinician. updateOnly stops a stray
+# clinicianId from creating a bogus Clinician, and disablePurge stops a
+# practitioner who clears their hours from being deleted along with them.
+ONTO_CLINICIAN = {'useGroupAsId': True, 'updateOnly': True, 'disablePurge': True}
+BY_CLINICIAN = [{'sourceField': 'clinicianId', 'operation': 'exact', 'targetField': 'id'}]
+
+# Only weekly blocks which are switched on say when someone can be booked:
+# dayOff rows are exclusions and extra rows are pinned to a date, so neither
+# carries a dayOfWeek to group by.
+WEEKLY = 'kind = weekly ~AND~ active = true'
+
+a = aggregation('availabilityDays', MODELS['Clinician'], MODELS['Availability'],
+                sourceFilterQuery=WEEKLY, **ONTO_CLINICIAN)
+agg_rules(a, 'AggregationGroupRule', ['sourceField'], BY_CLINICIAN)
+agg_rules(a, 'AggregationAggregateRule', ['sourceField', 'operation'], [
+    {'sourceField': 'dayOfWeek', 'operation': 'join', 'stringOperand': ',',
+     'targetField': 'availableDays'},
+    {'sourceField': 'startMinute', 'operation': 'min', 'targetField': 'earliestStartMinute'},
+    {'sourceField': 'endMinute', 'operation': 'max', 'targetField': 'latestEndMinute'},
+    {'sourceField': 'id', 'operation': 'count', 'targetField': 'availabilityCount'},
+])
+
+# The same join again, three times, each over a narrower slice of the same rows.
+# A band is an *overlap* test rather than containment, so a 9am-1pm block counts
+# as both a morning and an afternoon. Without this, searching for a day and a
+# time of day together would have to intersect two fields, which the query
+# language cannot do; here it is a single `contains` against one field.
+for name, target, window in [
+    ('availabilityMorning',   'morningDays',   'startMinute < 720 ~AND~ endMinute > 360'),
+    ('availabilityAfternoon', 'afternoonDays', 'startMinute < 1020 ~AND~ endMinute > 720'),
+    ('availabilityEvening',   'eveningDays',   'startMinute < 1320 ~AND~ endMinute > 1020'),
+]:
+    a = aggregation(name, MODELS['Clinician'], MODELS['Availability'],
+                    sourceFilterQuery=f'{WEEKLY} ~AND~ {window}', **ONTO_CLINICIAN)
+    agg_rules(a, 'AggregationGroupRule', ['sourceField'], BY_CLINICIAN)
+    agg_rules(a, 'AggregationAggregateRule', ['sourceField', 'operation'], [
+        {'sourceField': 'dayOfWeek', 'operation': 'join', 'stringOperand': ',',
+         'targetField': target},
+    ])
+
 print('\nAll models created/updated.')
+print('Deploy, then rebuild the aggregations to fill in existing Clinician records:')
+print("  curl -H \"Authorization:Bearer $(cat .saasufy-api-key)\" -XPOST "
+      "'https://saasufy.com/api/service/start'")

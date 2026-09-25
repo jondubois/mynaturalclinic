@@ -286,7 +286,21 @@
              touches the URL the main router reads. -->
         <app-router default-page="/nav-auth">
           <template slot="page" route-path="/nav-auth" no-auth-redirect="/nav-anon">
-            <log-out onclick="logOut()"><a href="javascript:void(0)">Log out</a></log-out>
+            <!-- Deauthenticating the socket leaves the Keycloak SSO session cookie
+                 intact, so the next Log in is waved straight through without a
+                 credentials prompt. logout-url makes log-out follow up with
+                 Keycloak's RP-initiated logout endpoint, which ends that session.
+                 post-logout-redirect-uri must stay equal to the redirect-uri sent
+                 by oauth-link / oauth-handler below: Keycloak validates it against
+                 the client's valid post logout redirect URIs, which default to
+                 the client's valid redirect URIs. -->
+            <log-out
+              onclick="logOut()"
+              provider="keycloak"
+              logout-url="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/logout"
+              client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+              post-logout-redirect-uri="http://localhost:8100/index.html"
+            ><a href="javascript:void(0)">Log out</a></log-out>
           </template>
           <template slot="page" route-path="/nav-anon" auth-redirect="/nav-auth">
           <oauth-link
@@ -429,10 +443,39 @@
               ></input-provider></label>
           </div>
 
+          <div class="toolbar">
+            <!-- Both of these hand the combiner a raw value rather than a ready-made query
+                 fragment: a day and a time of day have to be read together to pick the one
+                 field to match, which neither input can do on its own. -->
+            <label class="f" style="margin:0"><span class="lab">Available on</span>
+              <input-provider
+                name="day"
+                type="select"
+                options="Any day=,Monday=1,Tuesday=2,Wednesday=3,Thursday=4,Friday=5,Saturday=6,Sunday=0"
+                value=""
+                skip-init-change
+                consumers=".search-combiner"
+              ></input-provider></label>
+            <label class="f" style="margin:0"><span class="lab">Time of day</span>
+              <input-provider
+                name="band"
+                type="select"
+                options="Any time=,Morning (6am-12pm)=morning,Afternoon (12-5pm)=afternoon,Evening (5-10pm)=evening"
+                value=""
+                skip-init-change
+                consumers=".search-combiner"
+              ></input-provider></label>
+          </div>
+
+          <!-- The availability filter reads both day and band and resolves them to a single
+               `contains` against one of the four fields the Availability -> Clinician
+               aggregations maintain. A band alone matches any weekday in that band, hence
+               the [0-6] pattern; `contains` values are regular expressions. Days are single
+               digits, so they can never match each other across the comma separator. -->
           <input-combiner
             class="search-combiner"
             consumers=".search-results:collection-view-params"
-            provider-template="listingStatus=listed,query={{Object.values(value).filter(Boolean).join(' ~AND~ ')}},sortBy=displayName"
+            provider-template="listingStatus=listed,query={{[value.region, value.specialty, value.text, (function (day, band) { if (!day && !band) return ''; var field = band === 'morning' ? 'morningDays' : band === 'afternoon' ? 'afternoonDays' : band === 'evening' ? 'eveningDays' : 'availableDays'; return field + ' contains ' + (day || '[0-6]'); })(value.day, value.band)].filter(Boolean).join(' ~AND~ ')}},sortBy=displayName"
           ></input-combiner>
 
             <collection-reducer
@@ -478,7 +521,7 @@
           <collection-viewer
             class="search-results"
             collection-type="Clinician"
-            collection-fields="displayName,professionalTitle,city,priceAmount,consultationMinutes"
+            collection-fields="displayName,professionalTitle,city,priceAmount,consultationMinutes,availableDays,earliestStartMinute,latestEndMinute"
             collection-view="searchView"
             collection-view-params="listingStatus=listed,query=,sortBy=displayName"
             collection-view-primary-fields="listingStatus"
@@ -492,6 +535,26 @@
                 <div class="grow">
                   <div class="t"><a href="#/p/{{Clinician.id}}">{{Clinician.displayName}}</a></div>
                   <div class="d">{{Clinician.professionalTitle}} · {{Clinician.city}}</div>
+                  <!-- availableDays holds one weekday number per weekly block, so someone
+                       working two blocks on a Monday has 1 in it twice; the duplicates are
+                       dropped here rather than in the aggregation, which has no distinct
+                       operation. The hours are the earliest start and the latest end across
+                       the whole week, not one day's. -->
+                  <div class="d small muted">{{(function (days, from, until) {
+                    if (!days) return 'No weekly hours listed';
+                    var names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                    var listed = String(days).split(',');
+                    var label = [1, 2, 3, 4, 5, 6, 0].filter(function (day) {
+                      return listed.indexOf(String(day)) > -1;
+                    }).map(function (day) { return names[day]; }).join(' ');
+                    var clock = function (minute) {
+                      var hour = Math.floor(minute / 60), past = minute % 60;
+                      return (hour % 12 || 12) + (past ? ':' + (past < 10 ? '0' : '') + past : '') +
+                        (hour < 12 ? 'am' : 'pm');
+                    };
+                    if (from == null || until == null) return label;
+                    return label + ' · ' + clock(from) + '-' + clock(until);
+                  })(Clinician.availableDays, Clinician.earliestStartMinute, Clinician.latestEndMinute)}}</div>
                 </div>
                 <div class="small muted">${{Clinician.priceAmount / 100}} / {{Clinician.consultationMinutes}} min</div>
               </div>

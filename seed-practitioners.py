@@ -97,6 +97,23 @@ PRACTITIONERS = [
      'writes everything down so you are not relying on memory.'),
 ]
 
+# Weekly hours, keyed by display name. Deliberately varied so the browse filters
+# actually separate the list: some practitioners are mornings only, some run into
+# the evening, two work weekends and one is weekdays 9-5. Minutes are from
+# midnight, so 540 is 9:00am and 1020 is 5:00pm. Day 0 is Sunday.
+HOURS = {
+    'Dr Amara Okafor':   [((1, 2, 3, 4, 5), 540, 1020)],            # weekdays 9-5
+    'James Whitfield':   [((1, 3, 5), 420, 780)],                   # early mornings
+    'Dr Priya Nair':     [((2, 4), 780, 1200), ((6,), 540, 720)],   # afternoons + Sat am
+    'Hannah Lindqvist':  [((1, 2, 3), 600, 960)],                   # late mornings
+    'Dr Tomas Ricci':    [((3, 4, 5), 960, 1320)],                  # evenings
+    'Sophie Tran':       [((1, 2, 3, 4), 540, 780)],                # mornings
+    'Dr Wei Zhang':      [((2, 4, 6), 480, 1020)],                  # long days, incl. Sat
+    'Grace Mbeki':       [((1, 5), 720, 1260)],                     # afternoon into evening
+    'Dr Elena Petrova':  [((0, 6), 540, 900)],                      # weekends only
+    'Daniel Ferreira':   [((1, 2, 3, 4, 5), 1020, 1290)],           # after-work only
+}
+
 existing = {c['displayName']: c for c in call('GET', 'Clinician', None, 'pageSize=200').get('data', [])}
 created = updated = 0
 
@@ -121,3 +138,30 @@ for (name, title, city, region, topics, price, minutes, langs, bio) in PRACTITIO
         print(f'  {name}: {r}')
 
 print(f'{created} created, {updated} updated')
+
+# Weekly availability. Replaced rather than merged on every run, so the rows
+# always match HOURS above. The Availability -> Clinician aggregations pick these
+# up and write availableDays / morningDays / afternoonDays / eveningDays onto the
+# Clinician record, which is what the browse page filters on.
+print('\nseeding weekly availability...')
+clinicians = {c['displayName']: c for c in call('GET', 'Clinician', None, 'pageSize=200').get('data', [])}
+rows = 0
+for name, blocks in HOURS.items():
+    clin = clinicians.get(name)
+    if not clin:
+        print(f'  {name}: no clinician record, skipped')
+        continue
+    for old_row in call('GET', 'Availability', None,
+                        f"view=clinicianView&viewParams[clinicianId]={clin['id']}"
+                        '&pageSize=100').get('data', []):
+        call('DELETE', f"Availability/{old_row['id'] if isinstance(old_row, dict) else old_row}")
+    for days, start, end in blocks:
+        for day in days:
+            r = call('POST', 'Availability', {
+                'accountId': clin['accountId'], 'clinicianId': clin['id'],
+                'kind': 'weekly', 'dayOfWeek': day,
+                'startMinute': start, 'endMinute': end, 'active': True})
+            if str(r).startswith('ERR'): print(f'  {name} day {day}: {r}')
+            else: rows += 1
+print(f'{rows} weekly availability rows')
+print('\nThe aggregations fill in within ~60s, or rebuild them to apply immediately.')
