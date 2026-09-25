@@ -97,10 +97,8 @@ PRACTITIONERS = [
      'writes everything down so you are not relying on memory.'),
 ]
 
-# Weekly hours, keyed by display name. Deliberately varied so the browse filters
-# actually separate the list: some practitioners are mornings only, some run into
-# the evening, two work weekends and one is weekdays 9-5. Minutes are from
-# midnight, so 540 is 9:00am and 1020 is 5:00pm. Day 0 is Sunday.
+# Weekly hours by display name, varied so the browse filters separate the list.
+# Minutes from midnight (540 = 9am); day 0 is Sunday.
 HOURS = {
     'Dr Amara Okafor':   [((1, 2, 3, 4, 5), 540, 1020)],            # weekdays 9-5
     'James Whitfield':   [((1, 3, 5), 420, 780)],                   # early mornings
@@ -139,10 +137,7 @@ for (name, title, city, region, topics, price, minutes, langs, bio) in PRACTITIO
 
 print(f'{created} created, {updated} updated')
 
-# Weekly availability. Replaced rather than merged on every run, so the rows
-# always match HOURS above. The Availability -> Clinician aggregations pick these
-# up and write availableDays / morningDays / afternoonDays / eveningDays onto the
-# Clinician record, which is what the browse page filters on.
+# Replaced rather than merged each run, so the rows always match HOURS above.
 print('\nseeding weekly availability...')
 clinicians = {c['displayName']: c for c in call('GET', 'Clinician', None, 'pageSize=200').get('data', [])}
 rows = 0

@@ -135,8 +135,7 @@ def aggregation(name, target_model_id, source_model_id, **opts):
     return aid
 
 def agg_rules(agg_id, kind, key_fields, specs):
-    # A rule's id is derived from its key fields, so those identify it; anything
-    # else (targetField, operand, stringOperand) can be updated in place.
+    # A rule's id is derived from its key fields; the rest can be updated in place.
     have = {tuple(r.get(k) for k in key_fields): r['id'] for r in _page(
         kind, {'view': 'accountAggregationView', 'viewParams[aggregationId]': agg_id})}
     for spec in specs:
@@ -265,9 +264,8 @@ fields(m, 'Clinician', [
     {'name': 'emailVerified', 'type': B, 'defaultValue': 'false'},
     {'name': 'ratingAverage', 'type': N, 'defaultValue': '0'},
     {'name': 'ratingCount', 'type': N, 'integer': True, 'defaultValue': '0'},
-    # Written only by the Availability -> Clinician aggregations at the bottom of
-    # this file. The *Days fields hold the practitioner's weekday numbers joined
-    # with commas ('1,3,5'), which the browse query matches with `contains`.
+    # Written only by the aggregations at the bottom of this file. The *Days fields
+    # hold weekday numbers joined with commas ('1,3,5'), matched with `contains`.
     {'name': 'availableDays', 'type': S, 'max': 200},
     {'name': 'morningDays', 'type': S, 'max': 200},
     {'name': 'afternoonDays', 'type': S, 'max': 200},
@@ -305,8 +303,7 @@ field_access(m, {
     'pinRecipientToken':  {'accessRead': 'restrict'},
     'payoutAccountLast4': {'accessRead': 'restrict'},
     'payoutStatus':       {'accessRead': 'restrict'},
-    # The aggregations own these; a manual edit would be overwritten on the next
-    # cycle anyway, so refuse it outright. The service still writes them.
+    # Owned by the aggregations; the service still writes them.
     **{f: {'accessCreate': 'block', 'accessUpdate': 'block'} for f in (
         'availableDays', 'morningDays', 'afternoonDays', 'eveningDays',
         'earliestStartMinute', 'latestEndMinute', 'availabilityCount')},
@@ -597,19 +594,12 @@ views(m, [
 ])
 
 print('== Availability -> Clinician aggregations ==')
-# Availability is accessRead='restrict' (a practitioner's own rows only), so the
-# browse page cannot read it and a view cannot join across models. These four
-# pipelines roll each practitioner's weekly blocks up onto their own Clinician
-# record instead, where searchView's second-phase query can filter on them.
-#
-# useGroupAsId makes the group value (clinicianId) the target record id, which is
-# what lands the result on the matching Clinician. updateOnly stops a stray
-# clinicianId from creating a bogus Clinician, and disablePurge stops a
-# practitioner who clears their hours from being deleted along with them.
+# Availability is accessRead='restrict' and views cannot join, so these four
+# pipelines roll each practitioner's weekly blocks onto their Clinician record,
+# where searchView's second-phase query can filter on them. See README.
 ONTO_CLINICIAN = {'useGroupAsId': True, 'updateOnly': True, 'disablePurge': True}
 BY_CLINICIAN = [{'sourceField': 'clinicianId', 'operation': 'exact', 'targetField': 'id'}]
 
-# Only weekly blocks which are switched on say when someone can be booked:
 # dayOff rows are exclusions and extra rows are pinned to a date, so neither
 # carries a dayOfWeek to group by.
 WEEKLY = 'kind = weekly ~AND~ active = true'
@@ -625,11 +615,8 @@ agg_rules(a, 'AggregationAggregateRule', ['sourceField', 'operation'], [
     {'sourceField': 'id', 'operation': 'count', 'targetField': 'availabilityCount'},
 ])
 
-# The same join again, three times, each over a narrower slice of the same rows.
-# A band is an *overlap* test rather than containment, so a 9am-1pm block counts
-# as both a morning and an afternoon. Without this, searching for a day and a
-# time of day together would have to intersect two fields, which the query
-# language cannot do; here it is a single `contains` against one field.
+# The same join over three narrower slices, so a day and a time of day are one
+# `contains` against one field. Bands overlap: a 9am-1pm block is both.
 for name, target, window in [
     ('availabilityMorning',   'morningDays',   'startMinute < 720 ~AND~ endMinute > 360'),
     ('availabilityAfternoon', 'afternoonDays', 'startMinute < 1020 ~AND~ endMinute > 720'),

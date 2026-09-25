@@ -210,6 +210,9 @@
     background-color:var(--accent-soft);background-position:center;
     background-size:cover;background-repeat:no-repeat}
   .avatar.sm{width:52px;height:52px;align-self:center}
+  /* the switch-group is the flex child now, so sizing and centring belong to it */
+  .row .avatar-slot,.row .avatar-slot > [slot=viewport]{display:flex;flex:0 0 auto}
+  .row .avatar-slot{align-self:center}
 
   .hero{padding:44px 0 26px}
   .hero h1{font-size:2.3rem;max-width:18ch}
@@ -286,14 +289,8 @@
              touches the URL the main router reads. -->
         <app-router default-page="/nav-auth">
           <template slot="page" route-path="/nav-auth" no-auth-redirect="/nav-anon">
-            <!-- Deauthenticating the socket leaves the Keycloak SSO session cookie
-                 intact, so the next Log in is waved straight through without a
-                 credentials prompt. logout-url makes log-out follow up with
-                 Keycloak's RP-initiated logout endpoint, which ends that session.
-                 post-logout-redirect-uri must stay equal to the redirect-uri sent
-                 by oauth-link / oauth-handler below: Keycloak validates it against
-                 the client's valid post logout redirect URIs, which default to
-                 the client's valid redirect URIs. -->
+            <!-- logout-url also ends the Keycloak SSO session; post-logout-redirect-uri
+                 must stay equal to the redirect-uri below. See README. -->
             <log-out
               onclick="logOut()"
               provider="keycloak"
@@ -364,7 +361,7 @@
           <div class="sub">Practitioners currently listed.</div>
           <collection-viewer
             collection-type="Clinician"
-            collection-fields="displayName,professionalTitle,city,region,priceAmount"
+            collection-fields="displayName,professionalTitle,city,region,priceAmount,photo"
             collection-view="searchView"
             collection-view-params="listingStatus=listed,query=,sortBy=displayName"
             collection-view-primary-fields="listingStatus"
@@ -372,8 +369,17 @@
           >
             <template slot="item">
               <div class="row">
-                <div class="avatar sm"
-                  style="background-image:url('https://saasufy.com/sid8016/files/Clinician/{{Clinician.id}}/photo')"></div>
+                <!-- the /files endpoint 404s on an empty blob, so only ask once we know
+                     there is a photo -->
+                <switch-group class="avatar-slot" show-cases="has={{!!Clinician.photo}},none={{!Clinician.photo}}">
+                  <template slot="content" name="has">
+                    <div class="avatar sm" style="background-image:url('{{Clinician.photo}}')"></div>
+                  </template>
+                  <template slot="content" name="none">
+                    <div class="avatar sm"></div>
+                  </template>
+                  <div slot="viewport"></div>
+                </switch-group>
                 <div class="grow">
                   <div class="t"><a href="#/p/{{Clinician.id}}">{{Clinician.displayName}}</a></div>
                   <div class="d">{{Clinician.professionalTitle}} · {{Clinician.city}}</div>
@@ -444,9 +450,7 @@
           </div>
 
           <div class="toolbar">
-            <!-- Both of these hand the combiner a raw value rather than a ready-made query
-                 fragment: a day and a time of day have to be read together to pick the one
-                 field to match, which neither input can do on its own. -->
+            <!-- raw values, not query fragments: day and band are read together below -->
             <label class="f" style="margin:0"><span class="lab">Available on</span>
               <input-provider
                 name="day"
@@ -467,11 +471,8 @@
               ></input-provider></label>
           </div>
 
-          <!-- The availability filter reads both day and band and resolves them to a single
-               `contains` against one of the four fields the Availability -> Clinician
-               aggregations maintain. A band alone matches any weekday in that band, hence
-               the [0-6] pattern; `contains` values are regular expressions. Days are single
-               digits, so they can never match each other across the comma separator. -->
+          <!-- day + band resolve to one `contains` against one aggregated field; a bare
+               band matches any weekday, hence the [0-6] regex. -->
           <input-combiner
             class="search-combiner"
             consumers=".search-results:collection-view-params"
@@ -521,7 +522,7 @@
           <collection-viewer
             class="search-results"
             collection-type="Clinician"
-            collection-fields="displayName,professionalTitle,city,priceAmount,consultationMinutes,availableDays,earliestStartMinute,latestEndMinute"
+            collection-fields="displayName,professionalTitle,city,priceAmount,consultationMinutes,photo,availableDays,earliestStartMinute,latestEndMinute"
             collection-view="searchView"
             collection-view-params="listingStatus=listed,query=,sortBy=displayName"
             collection-view-primary-fields="listingStatus"
@@ -530,16 +531,22 @@
           >
             <template slot="item">
               <div class="row">
-                <div class="avatar sm"
-                  style="background-image:url('https://saasufy.com/sid8016/files/Clinician/{{Clinician.id}}/photo')"></div>
+                <!-- the /files endpoint 404s on an empty blob, so only ask once we know
+                     there is a photo -->
+                <switch-group class="avatar-slot" show-cases="has={{!!Clinician.photo}},none={{!Clinician.photo}}">
+                  <template slot="content" name="has">
+                    <div class="avatar sm" style="background-image:url('{{Clinician.photo}}')"></div>
+                  </template>
+                  <template slot="content" name="none">
+                    <div class="avatar sm"></div>
+                  </template>
+                  <div slot="viewport"></div>
+                </switch-group>
                 <div class="grow">
                   <div class="t"><a href="#/p/{{Clinician.id}}">{{Clinician.displayName}}</a></div>
                   <div class="d">{{Clinician.professionalTitle}} · {{Clinician.city}}</div>
-                  <!-- availableDays holds one weekday number per weekly block, so someone
-                       working two blocks on a Monday has 1 in it twice; the duplicates are
-                       dropped here rather than in the aggregation, which has no distinct
-                       operation. The hours are the earliest start and the latest end across
-                       the whole week, not one day's. -->
+                  <!-- one entry per weekly block, so duplicate days are dropped here;
+                       the hours span the week, not one day -->
                   <div class="d small muted">{{(function (days, from, until) {
                     if (!days) return 'No weekly hours listed';
                     var names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
