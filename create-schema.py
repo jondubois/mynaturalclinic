@@ -135,7 +135,6 @@ def aggregation(name, target_model_id, source_model_id, **opts):
     return aid
 
 def agg_rules(agg_id, kind, key_fields, specs):
-    # A rule's id is derived from its key fields; the rest can be updated in place.
     have = {tuple(r.get(k) for k in key_fields): r['id'] for r in _page(
         kind, {'view': 'accountAggregationView', 'viewParams[aggregationId]': agg_id})}
     for spec in specs:
@@ -264,8 +263,6 @@ fields(m, 'Clinician', [
     {'name': 'emailVerified', 'type': B, 'defaultValue': 'false'},
     {'name': 'ratingAverage', 'type': N, 'defaultValue': '0'},
     {'name': 'ratingCount', 'type': N, 'integer': True, 'defaultValue': '0'},
-    # Written only by the aggregations at the bottom of this file. The *Days fields
-    # hold weekday numbers joined with commas ('1,3,5'), matched with `contains`.
     {'name': 'availableDays', 'type': S, 'max': 200},
     {'name': 'morningDays', 'type': S, 'max': 200},
     {'name': 'afternoonDays', 'type': S, 'max': 200},
@@ -303,7 +300,6 @@ field_access(m, {
     'pinRecipientToken':  {'accessRead': 'restrict'},
     'payoutAccountLast4': {'accessRead': 'restrict'},
     'payoutStatus':       {'accessRead': 'restrict'},
-    # Owned by the aggregations; the service still writes them.
     **{f: {'accessCreate': 'block', 'accessUpdate': 'block'} for f in (
         'availableDays', 'morningDays', 'afternoonDays', 'eveningDays',
         'earliestStartMinute', 'latestEndMinute', 'availabilityCount')},
@@ -594,14 +590,12 @@ views(m, [
 ])
 
 print('== Availability -> Clinician aggregations ==')
-# Availability is accessRead='restrict' and views cannot join, so these four
-# pipelines roll each practitioner's weekly blocks onto their Clinician record,
-# where searchView's second-phase query can filter on them. See README.
+# Rolls weekly blocks onto the Clinician record so searchView can filter on them;
+# Availability itself is accessRead='restrict' and views cannot join. See README.
 ONTO_CLINICIAN = {'useGroupAsId': True, 'updateOnly': True, 'disablePurge': True}
 BY_CLINICIAN = [{'sourceField': 'clinicianId', 'operation': 'exact', 'targetField': 'id'}]
 
-# dayOff rows are exclusions and extra rows are pinned to a date, so neither
-# carries a dayOfWeek to group by.
+# dayOff and extra rows carry no dayOfWeek to group by.
 WEEKLY = 'kind = weekly ~AND~ active = true'
 
 a = aggregation('availabilityDays', MODELS['Clinician'], MODELS['Availability'],
@@ -615,8 +609,6 @@ agg_rules(a, 'AggregationAggregateRule', ['sourceField', 'operation'], [
     {'sourceField': 'id', 'operation': 'count', 'targetField': 'availabilityCount'},
 ])
 
-# The same join over three narrower slices, so a day and a time of day are one
-# `contains` against one field. Bands overlap: a 9am-1pm block is both.
 for name, target, window in [
     ('availabilityMorning',   'morningDays',   'startMinute < 720 ~AND~ endMinute > 360'),
     ('availabilityAfternoon', 'afternoonDays', 'startMinute < 1020 ~AND~ endMinute > 720'),

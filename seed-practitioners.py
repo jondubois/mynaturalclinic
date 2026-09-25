@@ -97,7 +97,6 @@ PRACTITIONERS = [
      'writes everything down so you are not relying on memory.'),
 ]
 
-# Weekly hours by display name, varied so the browse filters separate the list.
 # Minutes from midnight (540 = 9am); day 0 is Sunday.
 HOURS = {
     'Dr Amara Okafor':   [((1, 2, 3, 4, 5), 540, 1020)],            # weekdays 9-5
@@ -137,7 +136,6 @@ for (name, title, city, region, topics, price, minutes, langs, bio) in PRACTITIO
 
 print(f'{created} created, {updated} updated')
 
-# Replaced rather than merged each run, so the rows always match HOURS above.
 print('\nseeding weekly availability...')
 clinicians = {c['displayName']: c for c in call('GET', 'Clinician', None, 'pageSize=200').get('data', [])}
 rows = 0

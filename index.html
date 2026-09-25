@@ -210,7 +210,6 @@
     background-color:var(--accent-soft);background-position:center;
     background-size:cover;background-repeat:no-repeat}
   .avatar.sm{width:52px;height:52px;align-self:center}
-  /* the switch-group is the flex child now, so sizing and centring belong to it */
   .row .avatar-slot,.row .avatar-slot > [slot=viewport]{display:flex;flex:0 0 auto}
   .row .avatar-slot{align-self:center}
 
@@ -289,8 +288,6 @@
              touches the URL the main router reads. -->
         <app-router default-page="/nav-auth">
           <template slot="page" route-path="/nav-auth" no-auth-redirect="/nav-anon">
-            <!-- logout-url also ends the Keycloak SSO session; post-logout-redirect-uri
-                 must stay equal to the redirect-uri below. See README. -->
             <log-out
               onclick="logOut()"
               provider="keycloak"
@@ -369,8 +366,7 @@
           >
             <template slot="item">
               <div class="row">
-                <!-- the /files endpoint 404s on an empty blob, so only ask once we know
-                     there is a photo -->
+                <!-- /files 404s on an empty blob, so gate on the field -->
                 <switch-group class="avatar-slot" show-cases="has={{!!Clinician.photo}},none={{!Clinician.photo}}">
                   <template slot="content" name="has">
                     <div class="avatar sm" style="background-image:url('{{Clinician.photo}}')"></div>
@@ -431,26 +427,6 @@
           </div>
 
           <div class="toolbar">
-            <label class="f" style="margin:0;flex:1"><span class="lab">Search</span>
-              <!-- Emits a ready-made query fragment, or an empty string when blank so
-                   it drops out of the AND. ~OR1~ binds tighter than the outer ~AND~
-                   (higher number = higher priority), so this reads as
-                   "... AND (name OR title OR city)". Commas are stripped because
-                   collection-view-params is itself comma separated. -->
-              <input-provider
-                name="text"
-                type="text"
-                placeholder="Name, title or city"
-                value=""
-                skip-init-change
-                debounce-delay="400"
-                consumers=".search-combiner"
-                provider-template="{{(function(t){return t ? 'displayName contains (?i)' + t + ' ~OR1~ professionalTitle contains (?i)' + t + ' ~OR1~ city contains (?i)' + t : ''})(value.split(',').join(' ').trim())}}"
-              ></input-provider></label>
-          </div>
-
-          <div class="toolbar">
-            <!-- raw values, not query fragments: day and band are read together below -->
             <label class="f" style="margin:0"><span class="lab">Available on</span>
               <input-provider
                 name="day"
@@ -471,8 +447,26 @@
               ></input-provider></label>
           </div>
 
-          <!-- day + band resolve to one `contains` against one aggregated field; a bare
-               band matches any weekday, hence the [0-6] regex. -->
+          <div class="toolbar">
+            <label class="f" style="margin:0;flex:1"><span class="lab">Search</span>
+              <!-- Emits a ready-made query fragment, or an empty string when blank so
+                   it drops out of the AND. ~OR1~ binds tighter than the outer ~AND~
+                   (higher number = higher priority), so this reads as
+                   "... AND (name OR title OR city)". Commas are stripped because
+                   collection-view-params is itself comma separated. -->
+              <input-provider
+                name="text"
+                type="text"
+                placeholder="Name, title or city"
+                value=""
+                skip-init-change
+                debounce-delay="400"
+                consumers=".search-combiner"
+                provider-template="{{(function(t){return t ? 'displayName contains (?i)' + t + ' ~OR1~ professionalTitle contains (?i)' + t + ' ~OR1~ city contains (?i)' + t : ''})(value.split(',').join(' ').trim())}}"
+              ></input-provider></label>
+          </div>
+
+          <!-- a bare band matches any weekday, hence [0-6] -->
           <input-combiner
             class="search-combiner"
             consumers=".search-results:collection-view-params"
@@ -531,8 +525,6 @@
           >
             <template slot="item">
               <div class="row">
-                <!-- the /files endpoint 404s on an empty blob, so only ask once we know
-                     there is a photo -->
                 <switch-group class="avatar-slot" show-cases="has={{!!Clinician.photo}},none={{!Clinician.photo}}">
                   <template slot="content" name="has">
                     <div class="avatar sm" style="background-image:url('{{Clinician.photo}}')"></div>
@@ -545,8 +537,6 @@
                 <div class="grow">
                   <div class="t"><a href="#/p/{{Clinician.id}}">{{Clinician.displayName}}</a></div>
                   <div class="d">{{Clinician.professionalTitle}} · {{Clinician.city}}</div>
-                  <!-- one entry per weekly block, so duplicate days are dropped here;
-                       the hours span the week, not one day -->
                   <div class="d small muted">{{(function (days, from, until) {
                     if (!days) return 'No weekly hours listed';
                     var names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
