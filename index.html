@@ -47,17 +47,23 @@
 
   /* header */
   header.site{background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:20}
-  header.site .wrap{display:flex;align-items:center;gap:22px;height:60px;flex-wrap:wrap}
+  header.site .wrap{display:flex;align-items:center;gap:10px 22px;min-height:60px;flex-wrap:wrap;padding-block:9px}
   .brand{font-weight:650;font-size:1.05rem;color:var(--text);letter-spacing:-.01em}
   .brand span{color:var(--accent)}
-  nav.main{display:flex;gap:18px;margin-left:auto;flex-wrap:wrap}
+  nav.main{display:flex;gap:8px 18px;margin-left:auto;flex-wrap:wrap}
   nav.main a{color:var(--muted);font-size:.9rem}
   nav.main a:hover{color:var(--accent);text-decoration:none}
   /* The auth links are rendered into the nested app-router's viewport, so they are
      not direct children of nav.main and do not inherit its gap. Repeat it on the
      viewport so Log in / Sign up sit the same distance apart as the other links. */
   nav.main app-router{display:flex;align-items:center}
-  nav.main app-router > [slot=viewport]{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  nav.main app-router > [slot=viewport]{display:flex;align-items:center;gap:8px 18px;flex-wrap:wrap}
+  /* Narrow screens: give the nav its own full-width row under the brand so the
+     links wrap predictably instead of breaking mid-group. */
+  @media(max-width:640px){
+    nav.main{margin-left:0;width:100%;gap:8px 14px}
+    nav.main app-router > [slot=viewport]{gap:8px 14px}
+  }
 
   /* dev banner */
   .devbar{background:var(--warn-soft);border-bottom:1px solid #eadfbc;color:var(--warn);
@@ -69,6 +75,9 @@
     padding:20px;margin-bottom:16px}
   .card h2{margin-bottom:.15rem}
   .card .sub{color:var(--muted);font-size:.88rem;margin-bottom:1rem}
+  /* The tight h2 margin assumes a .sub line carries the gap; restore one where
+     content follows the heading directly. */
+  .card h2 + .btn-row{margin-top:.75rem}
 
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   @media(max-width:620px){.grid2{grid-template-columns:1fr}}
@@ -143,13 +152,13 @@
 
   /* checklist */
   ul.check{list-style:none;padding:0;margin:0}
-  ul.check li{display:flex;gap:13px;align-items:flex-start;padding:13px 0;border-top:1px solid var(--border)}
+  ul.check li{display:flex;gap:13px;align-items:center;padding:13px 0;border-top:1px solid var(--border)}
   ul.check li:first-child{border-top:0}
   /* width, not just flex-basis: steps wrapped in a switch-group are not flex items
      of the <li>, so the shorthand would not apply and the circle would size to its
      glyph. The wrapper is given the same fixed track so every row indents alike. */
   .mark{flex:0 0 22px;width:22px;height:22px;border-radius:50%;display:grid;
-    place-items:center;font-size:.72rem;font-weight:700;margin-top:1px;
+    place-items:center;font-size:.72rem;font-weight:700;
     box-sizing:border-box}
   ul.check li > switch-group{flex:0 0 22px;display:block}
   ul.check li > switch-group > [slot=viewport]{display:block}
@@ -297,28 +306,28 @@
             ><a href="javascript:void(0)">Log out</a></log-out>
           </template>
           <template slot="page" route-path="/nav-anon" auth-redirect="/nav-auth">
-          <oauth-link
-            provider="keycloak"
-            client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
-            redirect-uri="http://localhost:8100/index.html"
-            grant-type="authorization_code"
-          >
-            <template slot="item">
-              <a href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}">Log in</a>
-            </template>
-            <div slot="viewport"></div>
-          </oauth-link>
-          <oauth-link
-            provider="keycloak"
-            client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
-            redirect-uri="http://localhost:8100/index.html"
-            grant-type="authorization_code"
-          >
-            <template slot="item">
-              <a href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}&amp;prompt=create">Sign up</a>
-            </template>
-            <div slot="viewport"></div>
-          </oauth-link>
+            <oauth-link
+              provider="keycloak"
+              client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+              redirect-uri="http://localhost:8100/index.html"
+              grant-type="authorization_code"
+            >
+              <template slot="item">
+                <a href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}">Log in</a>
+              </template>
+              <div slot="viewport"></div>
+            </oauth-link>
+            <oauth-link
+              provider="keycloak"
+              client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+              redirect-uri="http://localhost:8100/index.html"
+              grant-type="authorization_code"
+            >
+              <template slot="item">
+                <a href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}&amp;prompt=create">Sign up</a>
+              </template>
+              <div slot="viewport"></div>
+            </oauth-link>
           </template>
           <div slot="viewport"></div>
         </app-router>
@@ -347,10 +356,10 @@
           <h1>Online consultations with qualified natural therapists</h1>
           <p>Search practitioners by what you need help with, where they are, and when
              they are actually free — then book and meet online.</p>
-          <p style="margin-top:20px">
+          <div class="btn-row" style="margin-top:20px">
             <a class="btn" href="#/clinician">Join as a practitioner</a>
-            <a class="btn sec" href="#/browse" style="margin-left:8px">Browse practitioners</a>
-          </p>
+            <a class="btn sec" href="#/browse">Browse practitioners</a>
+          </div>
         </div>
 
         <div class="card">
@@ -673,58 +682,58 @@
         <if-group show-content="{{!socket.authToken}}">
           <template slot="content">
             <h1>Join as a practitioner</h1>
-                    <p class="muted" style="max-width:60ch">We verify every practitioner before they appear in
-                      search results. Expect the process to take a few days, mostly waiting on credential review.</p>
+            <p class="muted" style="max-width:60ch">We verify every practitioner before they appear in
+              search results. Expect the process to take a few days, mostly waiting on credential review.</p>
 
-                    <div class="card">
-                      <h2>How it works</h2>
-                      <ol class="steps">
-                        <li><div><div class="t">Create your account</div>
-                          <div class="d muted">Email sign-up and verification, handled by our identity provider.</div></div></li>
-                        <li><div><div class="t">Complete your profile</div>
-                          <div class="d muted">Your name, focus areas, location, fee and a biography patients will read.</div></div></li>
-                        <li><div><div class="t">Submit your credentials</div>
-                          <div class="d muted">Degrees, registrations and certifications, with supporting documents.</div></div></li>
-                        <li><div><div class="t">Add your payout details</div>
-                          <div class="d muted">Where we send your share after each completed consultation.</div></div></li>
-                        <li><div><div class="t">Publish your availability</div>
-                          <div class="d muted">A weekly pattern plus any days off. Patients book against it.</div></div></li>
-                      </ol>
-                    </div>
+            <div class="card">
+              <h2>How it works</h2>
+              <ol class="steps">
+                <li><div><div class="t">Create your account</div>
+                  <div class="d muted">Email sign-up and verification, handled by our identity provider.</div></div></li>
+                <li><div><div class="t">Complete your profile</div>
+                  <div class="d muted">Your name, focus areas, location, fee and a biography patients will read.</div></div></li>
+                <li><div><div class="t">Submit your credentials</div>
+                  <div class="d muted">Degrees, registrations and certifications, with supporting documents.</div></div></li>
+                <li><div><div class="t">Add your payout details</div>
+                  <div class="d muted">Where we send your share after each completed consultation.</div></div></li>
+                <li><div><div class="t">Publish your availability</div>
+                  <div class="d muted">A weekly pattern plus any days off. Patients book against it.</div></div></li>
+              </ol>
+            </div>
 
             <div class="card">
               <h2>Create your account</h2>
               <p class="muted small">Email sign-up through the shared Saasufy Keycloak instance. You
                  will be asked to verify your email address before your profile can be reviewed.</p>
               <div class="btn-row">
-                            <oauth-link
-                              provider="keycloak"
-                              client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
-                              redirect-uri="http://localhost:8100/index.html"
-                              grant-type="authorization_code"
-                            >
-                              <template slot="item">
-                                <a class="btn" href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}&amp;prompt=create">
-                                  Sign up with email
-                                </a>
-                              </template>
-                              <div slot="viewport"></div>
-                            </oauth-link>
+                <oauth-link
+                  provider="keycloak"
+                  client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+                  redirect-uri="http://localhost:8100/index.html"
+                  grant-type="authorization_code"
+                >
+                  <template slot="item">
+                    <a class="btn" href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}&amp;prompt=create">
+                      Sign up with email
+                    </a>
+                  </template>
+                  <div slot="viewport"></div>
+                </oauth-link>
 
-                            <oauth-link
-                              provider="keycloak"
-                              client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
-                              redirect-uri="http://localhost:8100/index.html"
-                              grant-type="authorization_code"
-                            >
-                              <template slot="item">
-                                <a class="btn sec" href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}">
-                                  I already have an account
-                                </a>
-                              </template>
-                              <div slot="viewport"></div>
-                            </oauth-link>
-                            </div>
+                <oauth-link
+                  provider="keycloak"
+                  client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+                  redirect-uri="http://localhost:8100/index.html"
+                  grant-type="authorization_code"
+                >
+                  <template slot="item">
+                    <a class="btn sec" href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}">
+                      I already have an account
+                    </a>
+                  </template>
+                  <div slot="viewport"></div>
+                </oauth-link>
+              </div>
             </div>
           </template>
           <div slot="viewport"></div>
@@ -835,13 +844,13 @@
 
                             <div class="card">
                               <h2>Quick links</h2>
-                              <p style="margin:0">
+                              <div class="btn-row">
                                 <a class="btn sec" href="#/clinician/profile">Profile</a>
                                 <a class="btn sec" href="#/clinician/credentials">Credentials</a>
                                 <a class="btn sec" href="#/clinician/availability">Availability</a>
                                 <a class="btn sec" href="#/clinician/payouts">Payouts</a>
                                 <a class="btn sec" href="#/p/{{C.id}}">Public preview</a>
-                              </p>
+                              </div>
                             </div>
                           </template>
                           <div slot="viewport"></div>
