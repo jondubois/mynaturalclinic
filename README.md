@@ -22,9 +22,10 @@ ID and secret and provisions the client inside Keycloak automatically.
 | --- | --- |
 | Realm | **`tenant`** — *not* `master`, which is only Keycloak's admin realm |
 | Authorize URL | `https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth` |
-| Client ID | `saasufy-<your-saasufy-accountId>` (generated) |
 | Registration | append `&prompt=create` to the authorize URL |
-| Redirect URI | `http://localhost:8100/*` registered; the app sends `http://localhost:8100/index.html` |
+| Environments | `keycloak` (prod) and `keycloak:dev`, one `OAuthProvider` record each, each with its own Keycloak client |
+| Client ID | prod `saasufy-<accountId>`; dev is suffixed, `saasufy-<accountId>-dev` — both auto-generated |
+| Redirect URI | dev `http://localhost:8100/*`; prod `https://saasufy.com/sid8016/files/App/<recordId>/file/*` |
 | Logout URL | `https://auth.saasufy.com/realms/tenant/protocol/openid-connect/logout` |
 
 The canonical endpoints live in the `keycloak` entry of <https://saasufy.com/oauth-settings.js>
@@ -46,13 +47,21 @@ equal to the redirect URI the app sends. The `id_token_hint` is supplied by the 
 the auth token (the default `keycloak` provider config sets `idTokenField`), which is what keeps
 Keycloak from showing a *"Do you want to log out?"* confirmation page.
 
-**Changing where the app is served** means updating three things together:
+`index.html` is the **development** copy throughout: localhost URLs, `provider="keycloak:dev"`
+and the `-dev` client ID. `deploy.py` swaps all three over to production on the way up, driven by
+`devURL` and `rewrites` in `config.json` — so the two environments never need separate source files,
+and it warns if any dev token survives the rewrite.
 
-1. `redirectURI` on the `OAuthProvider` record (Saasufy pushes the change into Keycloak), then deploy.
-2. The `redirect-uri` attribute on both `oauth-link` elements and on `oauth-handler` in `index.html`.
-3. The `post-logout-redirect-uri` attribute on the `log-out` element in `index.html`.
-4. Nothing else — the authorize URLs use `{{oauth.redirectURI}}`, which `oauth-link` fills in
-   from its own `redirect-uri` attribute.
+**Changing where either environment is served** means updating two things together:
+
+1. `redirectURI` on that environment's `OAuthProvider` record (Saasufy pushes the change into
+   Keycloak, per environment), then deploy the service.
+2. The matching value in `config.json` — `devURL` for local, `deployURL` for production. The
+   `redirect-uri` and `post-logout-redirect-uri` attributes in `index.html` hold the dev URL and
+   are rewritten from there.
+
+Nothing else — the authorize URLs use `{{oauth.redirectURI}}`, which `oauth-link` fills in from its
+own `redirect-uri` attribute.
 
 A mismatch here fails *after* a successful Keycloak sign-up: Keycloak redirects to whatever
 `redirect_uri` the app sent, so pointing at a port nothing is serving lands the user on a blank
@@ -114,6 +123,8 @@ curl -H "Authorization:Bearer $(cat .saasufy-api-key)" -H "Content-Type: applica
 | `seed-dev-data.py` | Seeds the topic vocabulary and a demo practitioner for local development |
 | `seed-practitioners.py` | Seeds ten sample practitioners and their weekly availability, spread across regions, specialisations and times of day |
 | `dev-access.py` | Temporarily relaxes write access for local development; `restore` puts the spec's rules back |
+| `deploy.py` | Rewrites the dev URLs in `index.html` to the deployed URL and uploads it to Saasufy's file hosting. Strips indentation to stay under the API's 100 KiB request-body limit, which base64 hits well before the field's own `max`; `--dry-run` reports without uploading |
+| `config.json` | Deployment target — the source file, the dev URL to replace and the `files/` URL the app is served from |
 | `.saasufy-api-key` | Saasufy admin credential (gitignored) |
 | `.saasufy-service-url` | Deployed Saasufy service endpoint |
 

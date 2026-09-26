@@ -1,0 +1,9 @@
+{
+  "source": "index.html",
+  "devURL": "http://localhost:8100/index.html",
+  "deployURL": "https://saasufy.com/sid8016/files/App/0ffb6ccc-3511-46b0-867e-5a7c592b3266/file",
+  "rewrites": {
+    "keycloak:dev": "keycloak",
+    "saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069-dev": "saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+  }
+}

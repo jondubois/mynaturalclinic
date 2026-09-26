@@ -299,16 +299,16 @@
           <template slot="page" route-path="/nav-auth" no-auth-redirect="/nav-anon">
             <log-out
               onclick="logOut()"
-              provider="keycloak"
+              provider="keycloak:dev"
               logout-url="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/logout"
-              client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+              client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069-dev"
               post-logout-redirect-uri="http://localhost:8100/index.html"
             ><a href="javascript:void(0)">Log out</a></log-out>
           </template>
           <template slot="page" route-path="/nav-anon" auth-redirect="/nav-auth">
             <oauth-link
-              provider="keycloak"
-              client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+              provider="keycloak:dev"
+              client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069-dev"
               redirect-uri="http://localhost:8100/index.html"
               grant-type="authorization_code"
             >
@@ -318,8 +318,8 @@
               <div slot="viewport"></div>
             </oauth-link>
             <oauth-link
-              provider="keycloak"
-              client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+              provider="keycloak:dev"
+              client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069-dev"
               redirect-uri="http://localhost:8100/index.html"
               grant-type="authorization_code"
             >
@@ -707,8 +707,8 @@
                  will be asked to verify your email address before your profile can be reviewed.</p>
               <div class="btn-row">
                 <oauth-link
-                  provider="keycloak"
-                  client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+                  provider="keycloak:dev"
+                  client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069-dev"
                   redirect-uri="http://localhost:8100/index.html"
                   grant-type="authorization_code"
                 >
@@ -721,8 +721,8 @@
                 </oauth-link>
 
                 <oauth-link
-                  provider="keycloak"
-                  client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069"
+                  provider="keycloak:dev"
+                  client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069-dev"
                   redirect-uri="http://localhost:8100/index.html"
                   grant-type="authorization_code"
                 >
@@ -1511,7 +1511,7 @@
           <h2>Signing you in…</h2>
           <p class="muted">Completing authentication with Keycloak.</p>
           <oauth-handler
-            provider="keycloak"
+            provider="keycloak:dev"
             redirect-uri="http://localhost:8100/index.html"
             success-url="http://localhost:8100/index.html#/clinician"
             auth-timeout="15000"
