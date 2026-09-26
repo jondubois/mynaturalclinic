@@ -45,27 +45,22 @@
   .muted{color:var(--muted)}
   .small{font-size:.86rem}
 
-  /* header */
   header.site{background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:20}
   header.site .wrap{display:flex;align-items:center;gap:10px 22px;min-height:60px;flex-wrap:wrap;padding-block:9px}
   .brand{font-weight:650;font-size:1.05rem;color:var(--text);letter-spacing:-.01em}
   .brand span{color:var(--accent)}
-  nav.main{display:flex;gap:8px 18px;margin-left:auto;flex-wrap:wrap}
+  nav.main{display:flex;align-items:center;gap:8px 18px;margin-left:auto;flex-wrap:wrap}
   nav.main a{color:var(--muted);font-size:.9rem}
   nav.main a:hover{color:var(--accent);text-decoration:none}
-  /* The auth links are rendered into the nested app-router's viewport, so they are
-     not direct children of nav.main and do not inherit its gap. Repeat it on the
-     viewport so Log in / Sign up sit the same distance apart as the other links. */
   nav.main app-router{display:flex;align-items:center}
   nav.main app-router > [slot=viewport]{display:flex;align-items:center;gap:8px 18px;flex-wrap:wrap}
-  /* Narrow screens: give the nav its own full-width row under the brand so the
-     links wrap predictably instead of breaking mid-group. */
+  nav.main oauth-link,nav.main log-out,
+  nav.main oauth-link > [slot=viewport]{display:flex;align-items:center}
   @media(max-width:640px){
     nav.main{margin-left:0;width:100%;gap:8px 14px}
     nav.main app-router > [slot=viewport]{gap:8px 14px}
   }
 
-  /* dev banner */
   .devbar{background:var(--warn-soft);border-bottom:1px solid #eadfbc;color:var(--warn);
     font-size:.82rem;padding:7px 0}
   .devbar code{background:rgba(0,0,0,.05);padding:1px 5px;border-radius:4px;font-size:.95em}
@@ -75,8 +70,6 @@
     padding:20px;margin-bottom:16px}
   .card h2{margin-bottom:.15rem}
   .card .sub{color:var(--muted);font-size:.88rem;margin-bottom:1rem}
-  /* The tight h2 margin assumes a .sub line carries the gap; restore one where
-     content follows the heading directly. */
   .card h2 + .btn-row{margin-top:.75rem}
 
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
@@ -130,8 +123,6 @@
   label.f > .collection-adder-field-error-container{order:2}
   label.f > .hint{order:3}
 
-  /* oauth-link and friends are custom elements (display:inline by default) that wrap a
-     block-level viewport div; leaving them inline breaks button alignment. */
   oauth-link,log-out{display:inline-block}
   oauth-link > [slot=viewport]{display:inline-block}
   .btn-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
@@ -150,7 +141,6 @@
   .pill.pend{color:var(--warn);background:var(--warn-soft);border-color:#eadfbc}
   .pill.no{color:var(--danger);background:#fbeded;border-color:#f0d5d5}
 
-  /* checklist */
   ul.check{list-style:none;padding:0;margin:0}
   ul.check li{display:flex;gap:13px;align-items:center;padding:13px 0;border-top:1px solid var(--border)}
   ul.check li:first-child{border-top:0}
@@ -168,7 +158,6 @@
   .ck-body .t{font-weight:600}
   .ck-body .d{color:var(--muted);font-size:.86rem}
 
-  /* lists */
   .row{display:flex;gap:14px;align-items:flex-start;padding:14px 0;border-top:1px solid var(--border)}
   .row:first-child{border-top:0}
   .row .grow{flex:1;min-width:0}
@@ -199,7 +188,7 @@
     background:var(--surface);color:var(--text);font-weight:650;
     border-bottom:1px solid var(--border);padding:14px 18px}
   overlay-modal::part(content){padding:18px}
-  overlay-modal::part(footer){display:none}   /* confirm-modal puts its buttons in content */
+  overlay-modal::part(footer){display:none}
   .confirm-modal-content > div:first-child{color:var(--muted);margin-bottom:18px}
   .confirm-modal-buttons-container{display:flex;gap:10px;justify-content:flex-end}
   .modal-confirm-button,.modal-cancel-button{
@@ -237,15 +226,10 @@
   .sechead h2{margin:0}
   .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
   .toolbar > *{flex:1;min-width:150px}
-  /* collection-viewer renders previous-page / page-number / next-page as
-     consecutive slots. It sets and clears `disabled` on the buttons itself and
-     writes the page number into the slotted element, so this is layout only. */
   /* The pager slots sit directly in the component's shadow flow, after the
      viewport, so centring is done on the host and undone on the viewport (all
      rendered rows, loader, empty and error states live inside that). */
   collection-viewer.search-results{display:block;text-align:center}
-  /* Fixed height for the results area so the pager keeps its position whether a
-     page holds ten rows or two. */
   collection-viewer.search-results > [slot=viewport]{text-align:left;min-height:300px}
   .pager-btn{margin-top:14px}
   .pager-btn[disabled]{opacity:.45;cursor:default}
