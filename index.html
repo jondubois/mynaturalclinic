@@ -122,6 +122,11 @@
   label.f > model-input,label.f > input-provider{order:1}
   label.f > .collection-adder-field-error-container{order:2}
   label.f > .hint{order:3}
+  /* A banner rather than the default line of small text, for a confirmation which
+     would otherwise be easy to miss. */
+  collection-adder-form.notice > [slot=message].success{background:var(--accent-soft);
+    border:1px solid #cfe2d6;border-radius:8px;padding:11px 13px;
+    font-size:.9rem;font-weight:550;margin:0 0 16px}
 
   oauth-link,log-out{display:inline-block}
   oauth-link > [slot=viewport]{display:inline-block}
@@ -1121,10 +1126,11 @@
               <h2>Add a document</h2>
               <div class="sub">Submitted documents go to our review queue.</div>
               <collection-adder-form
+                class="notice"
                 collection-type="Document"
                 model-values="accountId={{socket.authToken ? socket.authToken.accountId : ''}},clinicianId={{Clinician.id}},reviewStatus=pending"
                 computable-model-values
-                success-message="Submitted for review."
+                success-message="Submitted for review — it is now in your list above, marked pending. You can add as many documents as you need."
                 trim-spaces
                 show-field-errors
               >
@@ -1455,7 +1461,9 @@
                   <div class="d">{{Doc.institution}} · {{Doc.yearAwarded}} · {{Doc.type}}</div>
                   <div class="d small">Registration no. {{Doc.registrationNumber}}</div>
                   <div class="d small">
-                    <a href="#/p/{{Doc.clinicianId}}">View practitioner</a> ·
+                    Practitioner: <a href="#/p/{{Doc.clinicianId}}"><model-text
+                      model-type="Clinician" model-id="{{Doc.clinicianId}}"
+                      model-field="displayName" default-value="View practitioner"></model-text></a> ·
                     <a href="https://saasufy.com/sid8016/files/Document/{{Doc.id}}/document"
                        target="_blank" rel="noopener">Supporting document</a>
                   </div>
