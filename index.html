@@ -141,9 +141,12 @@
   .pill.pend{color:var(--warn);background:var(--warn-soft);border-color:#eadfbc}
   .pill.no{color:var(--danger);background:#fbeded;border-color:#f0d5d5}
 
-  ul.check{list-style:none;padding:0;margin:0}
-  ul.check li{display:flex;gap:13px;align-items:center;padding:13px 0;border-top:1px solid var(--border)}
-  ul.check li:first-child{border-top:0}
+  ul.check{list-style:none;padding:0;margin:0;counter-reset:ck}
+  ul.check li{counter-increment:ck;display:flex;gap:13px;align-items:center;padding:13px 0;
+    border-bottom:1px solid var(--border)}
+  /* Child combinator: the account step sits inside an if-group viewport, so it is not a
+     direct child and keeps its rule. */
+  ul.check > li:last-child{border-bottom:0}
   /* width, not just flex-basis: steps wrapped in a switch-group are not flex items
      of the <li>, so the shorthand would not apply and the circle would size to its
      glyph. The wrapper is given the same fixed track so every row indents alike. */
@@ -154,6 +157,11 @@
   ul.check li > switch-group > [slot=viewport]{display:block}
   .mark.done{background:var(--accent);color:#fff}
   .mark.todo{background:#efedea;color:var(--muted);border:1px solid var(--border)}
+  .mark.todo::before{content:counter(ck)}
+  /* Listed profiles have nothing left to tick off, so the row is labelled, not numbered. */
+  .ico{flex:0 0 22px;width:22px;height:22px;display:grid;place-items:center;color:var(--accent)}
+  .ico svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7;
+    stroke-linecap:round;stroke-linejoin:round}
   .ck-body{flex:1}
   .ck-body .t{font-weight:600}
   .ck-body .d{color:var(--muted);font-size:.86rem}
@@ -215,7 +223,7 @@
   .hero h1{font-size:2.3rem;max-width:18ch}
   .hero p{max-width:56ch;color:var(--muted);font-size:1.03rem}
   .steps{counter-reset:s;list-style:none;padding:0;margin:0}
-  .steps li{counter-increment:s;display:flex;gap:14px;padding:11px 0}
+  .steps li{counter-increment:s;display:flex;align-items:center;gap:14px;padding:11px 0}
   .steps li::before{content:counter(s);flex:0 0 26px;height:26px;border-radius:50%;
     background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;
     font-weight:700;font-size:.8rem}
@@ -723,12 +731,9 @@
           <div slot="viewport"></div>
         </if-group>
 
-        <!-- Signed in: the onboarding dashboard. -->
+        <!-- Signed in: onboarding checklist, or the profile dashboard once listed. -->
         <if-group show-content="{{!!socket.authToken}}">
           <template slot="content">
-                    <h1>Your onboarding</h1>
-                    <p class="muted">Everything below must be complete before your profile appears in patient search.</p>
-
                     <collection-viewer
                       collection-type="Clinician"
                       collection-fields="accountId"
@@ -741,10 +746,13 @@
                         <model-viewer
                           model-type="Clinician"
                           model-id="{{Clinician.id}}"
-                          model-fields="displayName,professionalTitle,bio,topics,country,region,city,timezone,priceAmount,consultationMinutes,listingStatus,emailVerified,payoutStatus"
+                          model-fields="displayName,professionalTitle,bio,topics,country,region,city,timezone,priceAmount,consultationMinutes,listingStatus,payoutStatus"
                           type-alias="C"
                         >
                           <template slot="item">
+                            <h1>{{C.listingStatus === 'listed' ? 'Your profile dashboard' : 'Your onboarding'}}</h1>
+                            <p class="muted">{{C.listingStatus === 'listed' ? 'Your profile is live in patient search. Update any section below and the changes go out straight away.' : 'Everything below must be complete before your profile appears in patient search.'}}</p>
+
                             <div class="card">
                               <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px">
                                 <h2 style="margin:0">{{C.displayName}}</h2>
@@ -759,50 +767,61 @@
                               <div class="sub">{{C.professionalTitle}}</div>
 
                               <ul class="check">
+                                <if-group show-content="{{C.listingStatus !== 'listed'}}">
+                                  <template slot="content">
+                                    <li>
+                                      <div class="mark done">&#10003;</div>
+                                      <div class="ck-body">
+                                        <div class="t">Create your account</div>
+                                        <div class="d">Email sign-up and verification, handled by our identity provider.</div>
+                                      </div>
+                                    </li>
+                                  </template>
+                                  <div slot="viewport"></div>
+                                </if-group>
                                 <li>
-                                  <switch-group show-cases="y={{!!C.emailVerified}},n={{!C.emailVerified}}">
+                                  <switch-group show-cases="listed={{C.listingStatus === 'listed'}},y={{C.listingStatus !== 'listed' && !!C.bio && C.bio.length >= 200 && !!C.displayName && !!C.priceAmount}},n={{C.listingStatus !== 'listed' && !(C.bio && C.bio.length >= 200 && C.displayName && C.priceAmount)}}">
+                                    <template slot="content" name="listed"><div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.4"/><path d="M5.3 19.6a6.9 6.9 0 0 1 13.4 0"/></svg></div></template>
                                     <template slot="content" name="y"><div class="mark done">&#10003;</div></template>
-                                    <template slot="content" name="n"><div class="mark todo">1</div></template>
+                                    <template slot="content" name="n"><div class="mark todo"></div></template>
                                     <div slot="viewport"></div>
                                   </switch-group>
                                   <div class="ck-body">
-                                    <div class="t">Verify your email address</div>
-                                    <div class="d">Handled by the identity provider at sign-up.</div>
-                                  </div>
-                                </li>
-                                <li>
-                                  <switch-group show-cases="y={{!!C.bio && C.bio.length >= 200 && !!C.displayName && !!C.priceAmount}},n={{!(C.bio && C.bio.length >= 200 && C.displayName && C.priceAmount)}}">
-                                    <template slot="content" name="y"><div class="mark done">&#10003;</div></template>
-                                    <template slot="content" name="n"><div class="mark todo">2</div></template>
-                                    <div slot="viewport"></div>
-                                  </switch-group>
-                                  <div class="ck-body">
-                                    <div class="t"><a href="#/clinician/profile">Complete your profile</a></div>
+                                    <div class="t"><a href="#/clinician/profile">{{C.listingStatus === 'listed' ? 'Update your profile' : 'Complete your profile'}}</a></div>
                                     <div class="d">Name, title, focus areas, location, fee and a biography of at least 200 characters.</div>
                                   </div>
                                 </li>
                                 <li>
-                                  <div class="mark todo">3</div>
+                                  <switch-group show-cases="listed={{C.listingStatus === 'listed'}},n={{C.listingStatus !== 'listed'}}">
+                                    <template slot="content" name="listed"><div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="5"/><path d="M8.7 13.3 7.6 21l4.4-2.3 4.4 2.3-1.1-7.7"/></svg></div></template>
+                                    <template slot="content" name="n"><div class="mark todo"></div></template>
+                                    <div slot="viewport"></div>
+                                  </switch-group>
                                   <div class="ck-body">
-                                    <div class="t"><a href="#/clinician/credentials">Submit your credentials</a></div>
+                                    <div class="t"><a href="#/clinician/credentials">{{C.listingStatus === 'listed' ? 'Update your credentials' : 'Submit your credentials'}}</a></div>
                                     <div class="d">At least one approved qualification is required.</div>
                                   </div>
                                 </li>
                                 <li>
-                                  <switch-group show-cases="y={{C.payoutStatus === 'active'}},n={{C.payoutStatus !== 'active'}}">
+                                  <switch-group show-cases="listed={{C.listingStatus === 'listed'}},y={{C.listingStatus !== 'listed' && C.payoutStatus === 'active'}},n={{C.listingStatus !== 'listed' && C.payoutStatus !== 'active'}}">
+                                    <template slot="content" name="listed"><div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3 10h18"/></svg></div></template>
                                     <template slot="content" name="y"><div class="mark done">&#10003;</div></template>
-                                    <template slot="content" name="n"><div class="mark todo">4</div></template>
+                                    <template slot="content" name="n"><div class="mark todo"></div></template>
                                     <div slot="viewport"></div>
                                   </switch-group>
                                   <div class="ck-body">
-                                    <div class="t"><a href="#/clinician/payouts">Add payout details</a></div>
+                                    <div class="t"><a href="#/clinician/payouts">{{C.listingStatus === 'listed' ? 'Update payout details' : 'Add payout details'}}</a></div>
                                     <div class="d">Status: {{C.payoutStatus}}</div>
                                   </div>
                                 </li>
                                 <li>
-                                  <div class="mark todo">5</div>
+                                  <switch-group show-cases="listed={{C.listingStatus === 'listed'}},n={{C.listingStatus !== 'listed'}}">
+                                    <template slot="content" name="listed"><div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3.2v3.6M16 3.2v3.6"/></svg></div></template>
+                                    <template slot="content" name="n"><div class="mark todo"></div></template>
+                                    <div slot="viewport"></div>
+                                  </switch-group>
                                   <div class="ck-body">
-                                    <div class="t"><a href="#/clinician/availability">Publish your availability</a></div>
+                                    <div class="t"><a href="#/clinician/availability">{{C.listingStatus === 'listed' ? 'Update your availability' : 'Publish your availability'}}</a></div>
                                     <div class="d">A weekly pattern the booking system turns into bookable times.</div>
                                   </div>
                                 </li>
@@ -842,6 +861,7 @@
                       </template>
 
                       <template slot="no-item">
+                        <h1>Your onboarding</h1>
                         <div class="card">
                           <h2>No practitioner profile yet</h2>
                           <p class="muted">Nothing is associated with this account. Create the profile to begin.</p>
