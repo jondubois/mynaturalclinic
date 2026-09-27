@@ -221,8 +221,10 @@
     background-color:var(--accent-soft);background-position:center;
     background-size:cover;background-repeat:no-repeat}
   .avatar.sm{width:52px;height:52px;align-self:center}
-  .row .avatar-slot,.row .avatar-slot > [slot=viewport]{display:flex;flex:0 0 auto}
-  .row .avatar-slot{align-self:center}
+  /* Hold the avatar's 52px track on the wrapper too: the switch-group empties its
+     viewport while re-rendering, and an auto-width slot lets the row shift. */
+  .row .avatar-slot,.row .avatar-slot > [slot=viewport]{display:flex;flex:0 0 52px;width:52px}
+  .row .avatar-slot{align-self:center;min-height:52px}
 
   .hero{padding:44px 0 26px}
   .hero h1{font-size:2.3rem;max-width:18ch}
