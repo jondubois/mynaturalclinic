@@ -50,7 +50,7 @@ TOPICS = [
 ]
 
 print('wiping existing dev data...')
-for m in ('Credential','Availability','TimeSlot','Clinician','Topic'):
+for m in ('Document','Availability','TimeSlot','Clinician','Topic'):
     print(f'  {m}: removed {wipe(m)}')
 
 print('\nseeding Topic vocabulary...')
@@ -78,14 +78,14 @@ clin = call('POST', 'Clinician', dict(
 if str(clin).startswith('ERR'): raise SystemExit(f'clinician seed failed: {clin}')
 print('  clinician id:', clin)
 
-print('\nseeding credentials...')
+print('\nseeding documents...')
 for t, inst, qual, yr, st, note in [
     ('degree','Southern Cross University','Bachelor of Health Science (Naturopathy)',2011,'approved',''),
     ('registration','Australian Natural Therapists Association','ANTA Member #47182',2012,'approved',''),
     ('certification','Monash University','FODMAP-Trained Practitioner',2019,'pending',''),
 ]:
-    r = call('POST','Credential', dict(accountId=ACCOUNT, clinicianId=clin, type=t, institution=inst,
-             qualificationName=qual, yearAwarded=yr, reviewStatus=st, reviewNote=note))
+    r = call('POST','Document', dict(accountId=ACCOUNT, clinicianId=clin, type=t, institution=inst,
+             documentName=qual, yearAwarded=yr, reviewStatus=st, reviewNote=note))
     print(f'  {qual[:44]:46s} {st}' if not str(r).startswith('ERR') else f'  {r}')
 
 print('\nseeding availability...')

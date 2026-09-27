@@ -325,24 +325,26 @@ fields(m, 'GroupMembership', [
     {'name': 'accountId', 'type': S},
 ])
 
-print('== Credential ==')
+print('== Document ==')
 # Read and update of the sensitive parts are gated on membership of the admin
 # group; create and delete stay with the owning practitioner. groupId carries the
 # admin group id via defaultValue and is create/update-blocked for clients, so a
 # practitioner cannot repoint it at a group they own and approve themselves.
-m = model('Credential', 3, accessCreate='restrict', accessRead='allow',
+# Replaced the Credential model; do not reintroduce a Credential block here, a run
+# of this script would recreate the deleted model.
+m = model('Document', 3, accessCreate='restrict', accessRead='allow',
           accessUpdate='restrict', accessDelete='restrict',
           accessReadTokenAuthField='groupMemberships', accessReadModelAuthField='groupId',
           accessUpdateTokenAuthField='groupMemberships', accessUpdateModelAuthField='groupId',
           accessCreateTokenAuthField='accountId', accessCreateModelAuthField='accountId',
           accessDeleteTokenAuthField='accountId', accessDeleteModelAuthField='accountId',
           **OWNER)
-fields(m, 'Credential', [
+fields(m, 'Document', [
     {'name': 'accountId', 'type': S, 'required': True},
     {'name': 'clinicianId', 'type': S, 'required': True},
-    {'name': 'type', 'type': S, 'enum': 'degree,diploma,certification,registration,licence'},
+    {'name': 'type', 'type': S, 'enum': 'degree,diploma,certification,registration,licence,insurance'},
     {'name': 'institution', 'type': S, 'max': 200},
-    {'name': 'qualificationName', 'type': S, 'max': 200},
+    {'name': 'documentName', 'type': S, 'max': 200},
     {'name': 'yearAwarded', 'type': N, 'integer': True, 'min': 1900, 'max': 2100},
     {'name': 'registrationNumber', 'type': S, 'max': 100},
     {'name': 'document', 'type': S, 'blob': True},
@@ -372,9 +374,9 @@ views(m, [
 ])
 field_access(m, {
     # Documents are world-readable by design: the app only surfaces a link once a
-    # credential is approved, but the URL is derivable from the credential id,
-    # which Credential.accessRead='allow' already exposes. Do not put anything in
-    # here that must stay private.
+    # document is approved, but the URL is derivable from the record id, which
+    # Document.accessRead='allow' already exposes. Do not put anything in here
+    # that must stay private.
     'document':           {'accessRead': 'allow'},
     'registrationNumber': {'accessRead': 'restrict'},   # admin group only
     'reviewNote':         {'accessRead': 'allow'},      # addressed to the practitioner

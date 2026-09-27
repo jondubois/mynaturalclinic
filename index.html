@@ -252,7 +252,7 @@
      DEV NOTE
      There is no Keycloak / OAuth wired up yet, so the browser socket is
      unauthenticated. Saasufy therefore allows reads of models whose
-     accessRead is "allow" (Clinician, Topic, Credential, Review) and
+     accessRead is "allow" (Clinician, Topic, Document, Review) and
      refuses everything else.
 
      DEV_ACCOUNT_ID below is the account associated with the HTTP API
@@ -622,26 +622,26 @@
             </div>
             <div class="card">
               <h2>Qualifications</h2>
-              <div class="sub">Only approved credentials are shown publicly.</div>
+              <div class="sub">Only approved documents are shown publicly.</div>
               <collection-viewer
-                collection-type="Credential"
-                type-alias="Cred"
-                collection-fields="type,institution,qualificationName,yearAwarded,reviewStatus"
+                collection-type="Document"
+                type-alias="Doc"
+                collection-fields="type,institution,documentName,yearAwarded,reviewStatus"
                 collection-view="clinicianView"
                 collection-view-params="clinicianId={{Clinician.id}}"
                 collection-view-primary-fields="clinicianId"
                 collection-page-size="20"
               >
                 <template slot="item">
-                  <if-group show-content="{{Cred.reviewStatus === 'approved'}}">
+                  <if-group show-content="{{Doc.reviewStatus === 'approved'}}">
                     <template slot="content">
                       <div class="row">
                         <div class="grow">
-                          <div class="t">{{Cred.qualificationName}}</div>
-                          <div class="d">{{Cred.institution}} · {{Cred.yearAwarded}}</div>
+                          <div class="t">{{Doc.documentName}}</div>
+                          <div class="d">{{Doc.institution}} · {{Doc.yearAwarded}}</div>
                           <!-- Documents are world-readable; we only surface the link once a
-                               reviewer has approved the credential. -->
-                          <div class="d small"><a href="https://saasufy.com/sid8016/files/Credential/{{Cred.id}}/document"
+                               reviewer has approved the document. -->
+                          <div class="d small"><a href="https://saasufy.com/sid8016/files/Document/{{Doc.id}}/document"
                             target="_blank" rel="noopener">View certificate</a></div>
                         </div>
                         <span class="pill ok">verified</span>
@@ -651,7 +651,7 @@
                   </if-group>
                 </template>
                 <template slot="no-item"><div class="empty">No qualifications listed.</div></template>
-                <template slot="error"><div class="err">{{$Cred.error.message}}</div></template>
+                <template slot="error"><div class="err">{{$Doc.error.message}}</div></template>
                 <div slot="viewport"></div>
               </collection-viewer>
             </div>
@@ -675,7 +675,7 @@
           <template slot="content">
             <h1>Join as a practitioner</h1>
             <p class="muted" style="max-width:60ch">We verify every practitioner before they appear in
-              search results. Expect the process to take a few days, mostly waiting on credential review.</p>
+              search results. Expect the process to take a few days, mostly waiting on document review.</p>
 
             <div class="card">
               <h2>How it works</h2>
@@ -684,8 +684,8 @@
                   <div class="d muted">Email sign-up and verification, handled by our identity provider.</div></div></li>
                 <li><div><div class="t">Complete your profile</div>
                   <div class="d muted">Your name, focus areas, location, fee and a biography patients will read.</div></div></li>
-                <li><div><div class="t">Submit your credentials</div>
-                  <div class="d muted">Degrees, registrations and certifications, with supporting documents.</div></div></li>
+                <li><div><div class="t">Submit your documents</div>
+                  <div class="d muted">Degrees, registrations and certifications, and the certificate for each.</div></div></li>
                 <li><div><div class="t">Add your payout details</div>
                   <div class="d muted">Where we send your share after each completed consultation.</div></div></li>
                 <li><div><div class="t">Publish your availability</div>
@@ -798,7 +798,7 @@
                                     <div slot="viewport"></div>
                                   </switch-group>
                                   <div class="ck-body">
-                                    <div class="t"><a href="#/clinician/credentials">{{C.listingStatus === 'listed' ? 'Update your credentials' : 'Submit your credentials'}}</a></div>
+                                    <div class="t"><a href="#/clinician/documents">{{C.listingStatus === 'listed' ? 'Update your documents' : 'Submit your documents'}}</a></div>
                                     <div class="d">At least one approved qualification is required.</div>
                                   </div>
                                 </li>
@@ -838,7 +838,7 @@
                               <if-group show-content="{{!!socket.authToken && !!socket.authToken.groupMemberships && socket.authToken.groupMemberships.includes('620af869-cb09-4a20-bcf4-ed10510b3367')}}">
                                 <template slot="content">
                                   <p style="margin:12px 0 0">
-                                    <a class="btn sec" href="#/admin/reviews">Credential review queue</a>
+                                    <a class="btn sec" href="#/admin/reviews">Document review queue</a>
                                   </p>
                                 </template>
                                 <div slot="viewport"></div>
@@ -849,7 +849,7 @@
                               <h2>Quick links</h2>
                               <div class="btn-row">
                                 <a class="btn sec" href="#/clinician/profile">Profile</a>
-                                <a class="btn sec" href="#/clinician/credentials">Credentials</a>
+                                <a class="btn sec" href="#/clinician/documents">Documents</a>
                                 <a class="btn sec" href="#/clinician/availability">Availability</a>
                                 <a class="btn sec" href="#/clinician/payouts">Payouts</a>
                                 <a class="btn sec" href="#/p/{{C.id}}">Public preview</a>
@@ -1041,7 +1041,7 @@
 
             <div class="card">
               <h2>Listing</h2>
-              <div class="sub">Set by a reviewer once your profile and credentials check out.</div>
+              <div class="sub">Set by a reviewer once your profile and documents check out.</div>
               <table class="plain">
                 <tr><th>Listing status</th><td><model-text model-type="Clinician" model-id="{{Clinician.id}}" model-field="listingStatus"></model-text></td></tr>
                 <tr><th>Visible in search</th><td>Only while listing status is <code>listed</code>.</td></tr>
@@ -1056,19 +1056,19 @@
       </div>
     </template>
 
-    <!-- ============================ CREDENTIALS ============================ -->
-    <template slot="page" route-path="/clinician/credentials" no-auth-redirect="/clinician">
+    <!-- ============================= DOCUMENTS ============================= -->
+    <template slot="page" route-path="/clinician/documents" no-auth-redirect="/clinician">
       <div class="wrap">
-        <h1>Your credentials</h1>
+        <h1>Your documents</h1>
         <p class="muted">At least one approved qualification is required before you can be listed.
            Supporting documents are never shown publicly.</p>
 
         <div class="card">
           <h2>Submitted</h2>
           <collection-viewer
-            collection-type="Credential"
-            type-alias="Cred"
-            collection-fields="type,institution,qualificationName,yearAwarded,reviewStatus,reviewNote"
+            collection-type="Document"
+            type-alias="Doc"
+            collection-fields="type,institution,documentName,yearAwarded,reviewStatus,reviewNote"
             collection-view="accountView"
             collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
             collection-view-primary-fields="accountId"
@@ -1077,34 +1077,34 @@
             <template slot="item">
               <div class="row">
                 <div class="grow">
-                  <div class="t">{{Cred.qualificationName}}</div>
-                  <div class="d">{{Cred.institution}} · {{Cred.yearAwarded}} · {{Cred.type}}</div>
-                  <if-group show-content="{{!!Cred.reviewNote}}">
-                    <template slot="content"><div class="d" style="margin-top:4px">Reviewer note: {{Cred.reviewNote}}</div></template>
+                  <div class="t">{{Doc.documentName}}</div>
+                  <div class="d">{{Doc.institution}} · {{Doc.yearAwarded}} · {{Doc.type}}</div>
+                  <if-group show-content="{{!!Doc.reviewNote}}">
+                    <template slot="content"><div class="d" style="margin-top:4px">Reviewer note: {{Doc.reviewNote}}</div></template>
                     <div slot="viewport"></div>
                   </if-group>
-                  <if-group show-content="{{Cred.reviewStatus === 'approved'}}">
-                    <template slot="content"><div class="d small"><a href="https://saasufy.com/sid8016/files/Credential/{{Cred.id}}/document"
+                  <if-group show-content="{{Doc.reviewStatus === 'approved'}}">
+                    <template slot="content"><div class="d small"><a href="https://saasufy.com/sid8016/files/Document/{{Doc.id}}/document"
                       target="_blank" rel="noopener">View certificate</a></div></template>
                     <div slot="viewport"></div>
                   </if-group>
                 </div>
-                <switch-group show-cases="a={{Cred.reviewStatus === 'approved'}},p={{Cred.reviewStatus === 'pending'}},r={{Cred.reviewStatus === 'rejected'}}">
+                <switch-group show-cases="a={{Doc.reviewStatus === 'approved'}},p={{Doc.reviewStatus === 'pending'}},r={{Doc.reviewStatus === 'rejected'}}">
                   <template slot="content" name="a"><span class="pill ok">approved</span></template>
                   <template slot="content" name="p"><span class="pill pend">pending</span></template>
                   <template slot="content" name="r"><span class="pill no">rejected</span></template>
                   <div slot="viewport"></div>
                 </switch-group>
-                <collection-deleter model-id="{{Cred.id}}"
-                  confirm-message="Remove this credential? This cannot be undone."
+                <collection-deleter model-id="{{Doc.id}}"
+                  confirm-message="Remove this document? This cannot be undone."
                   onclick="confirmDeleteItem()">&#x2715;</collection-deleter>
               </div>
             </template>
             <template slot="no-item"><div class="empty">Nothing submitted yet.</div></template>
             <template slot="loader"><div class="spin">Loading…</div></template>
-            <template slot="error"><div class="err">{{$Cred.error.message}}</div></template>
+            <template slot="error"><div class="err">{{$Doc.error.message}}</div></template>
             <div slot="viewport"></div>
-            <confirm-modal slot="modal" heading="Remove credential" message="" confirm-button-label="Remove" cancel-button-label="Cancel" auto-focus="cancel"></confirm-modal>
+            <confirm-modal slot="modal" heading="Remove document" message="" confirm-button-label="Remove" cancel-button-label="Cancel" auto-focus="cancel"></confirm-modal>
           </collection-viewer>
         </div>
 
@@ -1118,10 +1118,10 @@
         >
           <template slot="item">
             <div class="card">
-              <h2>Add a credential</h2>
-              <div class="sub">Submitted credentials go to our review queue.</div>
+              <h2>Add a document</h2>
+              <div class="sub">Submitted documents go to our review queue.</div>
               <collection-adder-form
-                collection-type="Credential"
+                collection-type="Document"
                 model-values="accountId={{socket.authToken ? socket.authToken.accountId : ''}},clinicianId={{Clinician.id}},reviewStatus=pending"
                 computable-model-values
                 success-message="Submitted for review."
@@ -1137,13 +1137,14 @@
                       <option value="certification">Certification</option>
                       <option value="registration">Professional registration</option>
                       <option value="licence">Licence</option>
+                      <option value="insurance">Insurance certificate</option>
                     </select></label>
                   <label class="f"><span class="lab">Year awarded</span>
                     <input type="number" name="yearAwarded" output-type="number" placeholder="2014"></label>
                   <label class="f"><span class="lab">Institution / body</span>
                     <input type="text" name="institution" placeholder="Southern Cross University"></label>
-                  <label class="f"><span class="lab">Qualification name</span>
-                    <input type="text" name="qualificationName" placeholder="Bachelor of Health Science"></label>
+                  <label class="f"><span class="lab">Document name</span>
+                    <input type="text" name="documentName" placeholder="Bachelor of Health Science"></label>
                   <label class="f"><span class="lab">Registration number (private)</span>
                     <input type="text" name="registrationNumber" placeholder="Optional"></label>
                 </div>
@@ -1367,18 +1368,18 @@
     <!-- ============================ ADMIN REVIEW QUEUE ============================ -->
     <template slot="page" route-path="/admin/reviews" no-auth-redirect="/clinician">
       <div class="wrap">
-        <h1>Credential review</h1>
+        <h1>Document review</h1>
 
         <!-- Membership of the admin Group is what grants access here. The same
-             group id is on every Credential, so Saasufy enforces it server-side
+             group id is on every Document, so Saasufy enforces it server-side
              too: reading the supporting document and updating the review fields
-             both check groupMemberships against Credential.groupId. -->
+             both check groupMemberships against Document.groupId. -->
         <if-group show-content="{{!(socket.authToken && socket.authToken.groupMemberships && socket.authToken.groupMemberships.includes('620af869-cb09-4a20-bcf4-ed10510b3367'))}}">
           <template slot="content">
             <div class="card">
               <h2>Not authorised</h2>
               <p class="muted">This page is for reviewers. Your account is not a member of the
-                 admin group, so the platform will not release credential documents to you.</p>
+                 admin group, so the platform will not release documents to you.</p>
               <a class="btn sec" href="#/clinician">Back to your dashboard</a>
             </div>
           </template>
@@ -1388,7 +1389,7 @@
         <if-group show-content="{{!!socket.authToken && !!socket.authToken.groupMemberships && socket.authToken.groupMemberships.includes('620af869-cb09-4a20-bcf4-ed10510b3367')}}">
           <template slot="content">
         <p class="muted">Approve or reject submitted qualifications. Confirm the name on the
-           credential matches the name on the practitioner's payout account before approving.</p>
+           document matches the name on the practitioner's payout account before approving.</p>
 
         <div class="card">
           <div class="sechead"><h2>Practitioner listings</h2></div>
@@ -1439,9 +1440,9 @@
         <div class="card">
           <div class="sechead"><h2>Pending</h2></div>
           <collection-viewer
-            collection-type="Credential"
-            type-alias="Cred"
-            collection-fields="type,institution,qualificationName,yearAwarded,clinicianId,registrationNumber"
+            collection-type="Document"
+            type-alias="Doc"
+            collection-fields="type,institution,documentName,yearAwarded,clinicianId,registrationNumber"
             collection-view="reviewQueueView"
             collection-view-params="reviewStatus=pending"
             collection-view-primary-fields="reviewStatus"
@@ -1450,29 +1451,29 @@
             <template slot="item">
               <div class="row">
                 <div class="grow">
-                  <div class="t">{{Cred.qualificationName}}</div>
-                  <div class="d">{{Cred.institution}} · {{Cred.yearAwarded}} · {{Cred.type}}</div>
-                  <div class="d small">Registration no. {{Cred.registrationNumber}}</div>
+                  <div class="t">{{Doc.documentName}}</div>
+                  <div class="d">{{Doc.institution}} · {{Doc.yearAwarded}} · {{Doc.type}}</div>
+                  <div class="d small">Registration no. {{Doc.registrationNumber}}</div>
                   <div class="d small">
-                    <a href="#/p/{{Cred.clinicianId}}">View practitioner</a> ·
-                    <a href="https://saasufy.com/sid8016/files/Credential/{{Cred.id}}/document"
+                    <a href="#/p/{{Doc.clinicianId}}">View practitioner</a> ·
+                    <a href="https://saasufy.com/sid8016/files/Document/{{Doc.id}}/document"
                        target="_blank" rel="noopener">Supporting document</a>
                   </div>
                 </div>
                 <div style="min-width:210px">
                   <label class="f" style="margin:0"><span class="lab">Decision</span>
                     <model-input type="select" options="pending,approved,rejected"
-                      model-type="Credential" model-id="{{Cred.id}}"
+                      model-type="Document" model-id="{{Doc.id}}"
                       model-field="reviewStatus" show-error-message></model-input></label>
                   <label class="f" style="margin:8px 0 0"><span class="lab">Note to practitioner</span>
-                    <model-input type="text" model-type="Credential" model-id="{{Cred.id}}"
+                    <model-input type="text" model-type="Document" model-id="{{Doc.id}}"
                       model-field="reviewNote" placeholder="Optional" show-error-message></model-input></label>
                 </div>
               </div>
             </template>
             <template slot="no-item"><div class="empty">Nothing waiting for review.</div></template>
             <template slot="loader"><div class="spin">Loading queue…</div></template>
-            <template slot="error"><div class="err">{{$Cred.error.message}}</div></template>
+            <template slot="error"><div class="err">{{$Doc.error.message}}</div></template>
             <div slot="viewport"></div>
           </collection-viewer>
         </div>
@@ -1480,9 +1481,9 @@
         <div class="card">
           <div class="sechead"><h2>Recently approved</h2></div>
           <collection-viewer
-            collection-type="Credential"
-            type-alias="Cred"
-            collection-fields="qualificationName,institution,yearAwarded"
+            collection-type="Document"
+            type-alias="Doc"
+            collection-fields="documentName,institution,yearAwarded"
             collection-view="reviewQueueView"
             collection-view-params="reviewStatus=approved"
             collection-view-primary-fields="reviewStatus"
@@ -1491,14 +1492,14 @@
             <template slot="item">
               <div class="row">
                 <div class="grow">
-                  <div class="t">{{Cred.qualificationName}}</div>
-                  <div class="d">{{Cred.institution}} · {{Cred.yearAwarded}}</div>
+                  <div class="t">{{Doc.documentName}}</div>
+                  <div class="d">{{Doc.institution}} · {{Doc.yearAwarded}}</div>
                 </div>
                 <span class="pill ok">approved</span>
               </div>
             </template>
             <template slot="no-item"><div class="empty">None yet.</div></template>
-            <template slot="error"><div class="err">{{$Cred.error.message}}</div></template>
+            <template slot="error"><div class="err">{{$Doc.error.message}}</div></template>
             <div slot="viewport"></div>
           </collection-viewer>
         </div>

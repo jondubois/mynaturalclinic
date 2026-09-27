@@ -9,7 +9,7 @@
 
 MyNaturalClinic is a two-sided marketplace.
 
-- **Clinicians** register, submit academic and professional credentials, are verified by the platform, and publish their availability (AirBnB-style calendar).
+- **Clinicians** register, submit academic and professional documents, are verified by the platform, and publish their availability (AirBnB-style calendar).
 - **Patients** search and browse anonymously with no account, and only sign up at the moment they commit to a booking.
 - The platform **intermediates the relationship**: it issues the meeting invitation, hosts the meeting link under its own domain, records attendance of both parties, holds the patient's payment up front, and releases funds to the clinician only after attendance is recorded.
 
@@ -116,8 +116,8 @@ Everything else — profile editing, search, dashboards — goes browser → Saa
 | --- | --- | --- |
 | **Visitor** | Anonymous | Search, filter, view clinician profiles and open availability. Cannot book. |
 | **Patient** | Keycloak account | Everything a Visitor can do, plus book, pay, attend, view own appointments. |
-| **Clinician** | Keycloak account, email-verified, credential-approved | Manage profile, credentials, availability; accept/reject invites; attend; receive payouts. |
-| **Admin** | Saasufy dashboard / admin credential | Review and approve/reject clinician credentials; resolve disputes. MVP admin UI is the Saasufy dashboard plus a minimal internal page. |
+| **Clinician** | Keycloak account, email-verified, document-approved | Manage profile, documents, availability; accept/reject invites; attend; receive payouts. |
+| **Admin** | Saasufy dashboard / admin credential | Review and approve/reject clinician documents; resolve disputes. MVP admin UI is the Saasufy dashboard plus a minimal internal page. |
 
 ---
 
@@ -143,14 +143,14 @@ Everything else — profile editing, search, dashboards — goes browser → Saa
 ### 4.3 Clinician onboarding — high friction, deliberately
 
 **REQ-CLIN-1** A clinician must register through Keycloak and **complete Keycloak email verification** before a `Clinician` can move beyond `draft`.
-**REQ-CLIN-2** The clinician must supply, at minimum: display name, professional title, at least one `Topic`, country + state/region + city, timezone, consultation duration, price, a biography of ≥ 200 characters, and at least one credential record.
-**REQ-CLIN-3** Each `Credential` requires: type (`degree` | `diploma` | `certification` | `registration` | `licence`), issuing institution, qualification name, year awarded, and a supporting document upload (PDF or image, stored in a Saasufy `blob` field).
-**REQ-CLIN-4** A clinician's profile is only visible in patient search results when `listingStatus = 'listed'`, which requires **all** of: Keycloak email verified, profile complete per REQ-CLIN-2, at least one credential with `reviewStatus = 'approved'`, a verified payout recipient (REQ-CLIN-6), and at least one future availability slot.
-**REQ-CLIN-5** Credential review is manual for the MVP. An admin sets `reviewStatus` to `approved` or `rejected` with a `reviewNote`. The clinician sees the status and the note on their dashboard in realtime.
+**REQ-CLIN-2** The clinician must supply, at minimum: display name, professional title, at least one `Topic`, country + state/region + city, timezone, consultation duration, price, a biography of ≥ 200 characters, and at least one document record.
+**REQ-CLIN-3** Each `Document` requires: type (`degree` | `diploma` | `certification` | `registration` | `licence` | `insurance`), issuing institution, qualification/document name, year awarded, and a supporting document upload (PDF or image, stored in a Saasufy `blob` field).
+**REQ-CLIN-4** A clinician's profile is only visible in patient search results when `listingStatus = 'listed'`, which requires **all** of: Keycloak email verified, profile complete per REQ-CLIN-2, at least one document with `reviewStatus = 'approved'`, a verified payout recipient (REQ-CLIN-6), and at least one future availability slot.
+**REQ-CLIN-5** Document review is manual for the MVP. An admin sets `reviewStatus` to `approved` or `rejected` with a `reviewNote`. The clinician sees the status and the note on their dashboard in realtime.
 **REQ-CLIN-6 · Payout details.** Pin Payments has **no hosted seller-onboarding product**. Clinicians do not hold their own Pin account; each is represented as a Pin **Recipient**, created from an email address plus Australian bank details (BSB and account number) that *we* collect in our own UI. Accordingly:
   - The bank details form is part of the clinician dashboard, submitted directly to Pin's `/recipients` endpoint via the worker. **Raw BSB and account numbers are never written to Saasufy** — only the returned `pinRecipientToken` and a masked last-four for display.
   - `payoutStatus` moves `none → pending → active` once Pin returns a recipient token; `restricted` if Pin rejects the details.
-  - **Identity verification is our responsibility.** Stripe Connect would have performed KYC on the clinician; Pin does not. For the MVP, the manual credential review (REQ-CLIN-5) doubles as the identity check — the admin must confirm the name on the credentials matches the name on the payout account before approving. This is a deliberate, documented gap: it is a manual control, not an automated one.
+  - **Identity verification is our responsibility.** Stripe Connect would have performed KYC on the clinician; Pin does not. For the MVP, the manual document review (REQ-CLIN-5) doubles as the identity check — the admin must confirm the name on the documents matches the name on the payout account before approving. This is a deliberate, documented gap: it is a manual control, not an automated one.
 
 ---
 
@@ -171,7 +171,7 @@ Everything else — profile editing, search, dashboards — goes browser → Saa
 | Collection | What it is |
 | --- | --- |
 | `Clinician` | A practitioner who offers consultations, and everything shown on their public listing. |
-| `Credential` | A qualification a clinician has submitted for us to check. |
+| `Document` | A qualification a clinician has submitted for us to check. |
 | `Availability` | When a clinician says they work — their weekly pattern, plus days off and one-off extra hours. |
 | `TimeSlot` | A single bookable appointment time. |
 | `Appointment` | A booking between a patient and a clinician. |
@@ -214,10 +214,12 @@ One row per practitioner. This is both the profile **and** the search listing �
 
 Access: `accessCreate: restrict`, `accessRead: allow`, `accessUpdate: restrict`, `accessDelete: block` (soft-delete via `listingStatus`), `accessTokenAuthField: accountId`, `accessModelAuthField: accountId`. Private fields are restricted individually at field level — which is exactly why the public listing does not need to be a separate collection.
 
-#### `Credential`
-`accountId` (owner), `clinicianId`, `type` (enum `degree,diploma,certification,registration,licence`), `institution`, `qualificationName`, `yearAwarded` (number), `registrationNumber`, `document` (`blob`), `reviewStatus` (enum `pending,approved,rejected`, **admin write only**), `reviewNote` (**admin write only**), `reviewedAt`.
+#### `Document`
+`accountId` (owner), `clinicianId`, `type` (enum `degree,diploma,certification,registration,licence,insurance`), `institution`, `documentName`, `yearAwarded` (number), `registrationNumber`, `document` (`blob`), `reviewStatus` (enum `pending,approved,rejected`, **admin write only**), `reviewNote` (**admin write only**), `reviewedAt`.
 
-Access: owner-only, **except** `type`, `institution`, `qualificationName`, `yearAwarded` which are `accessRead: allow` so approved credentials appear on the public profile. `document` is always `accessRead: restrict` — supporting documents are never public.
+Access: `accessCreate: restrict`, `accessRead: allow`, `accessUpdate: restrict`, `accessDelete: restrict`. Create and delete belong to the owning practitioner (`accountId`); update is gated on membership of the admin group (`groupMemberships` against `groupId`), which is what makes `reviewStatus` and `reviewNote` admin-write-only. `registrationNumber` is the only `accessRead: restrict` field — admin group only.
+
+`document` is `accessRead: allow`, deliberately. The app links to a supporting document only once it is approved, but the record id is public and the `/files` URL is derived from it, so a restricted blob on a world-readable record would be security theatre. Treat anything put in this field as public.
 
 #### `Availability`
 The clinician's calendar input, merged into one collection because to a clinician it is one idea: "when I work".
@@ -280,12 +282,12 @@ The queue the worker drains. `toAccountId`, `toEmail`, `template`, `payload` (JS
 **REQ-PROF-3** Profile edits take effect in search immediately — the query matches the practitioner's own fields, so there is nothing derived to rebuild and no consistency window. The worker's only remaining denormalisation here is copying `priceAmount` / `consultationMinutes` onto future `TimeSlot` records so a slot renders without a join.
 **REQ-PROF-4** A profile-completeness checklist shows, via `<if-group>`, exactly which of the REQ-CLIN-4 conditions are still unmet.
 
-### 6.2 Credentials
+### 6.2 Documents
 
-**REQ-CRED-1** Credentials are added with `<collection-adder-form>` including the `blob` document field.
-**REQ-CRED-2** Submitting a credential sets `reviewStatus = 'pending'` and moves the profile to `listingStatus = 'pending_review'`.
-**REQ-CRED-3** The public profile lists approved credentials only (institution, qualification, year). Documents are never publicly readable.
-**REQ-CRED-4** On approval or rejection, the worker queues an email to the clinician.
+**REQ-DOC-1** Documents are added with `<collection-adder-form>` including the `blob` document field.
+**REQ-DOC-2** Submitting a document sets `reviewStatus = 'pending'` and moves the profile to `listingStatus = 'pending_review'`.
+**REQ-DOC-3** The public profile lists approved documents only (institution, qualification, year). The supporting document is linked from there and is publicly readable (REQ-NFR-3).
+**REQ-DOC-4** On approval or rejection, the worker queues an email to the clinician.
 
 ### 6.3 Availability
 
@@ -488,7 +490,7 @@ Payouts use the Pin Payments **Recipients** and **Transfers** APIs. Patient card
 
 ### 6.10 Notifications
 
-**REQ-NOTIF-1** Transactional emails required for the MVP: clinician credential approved/rejected; booking invite to clinician; booking confirmed (both parties, with `.ics`); booking declined/expired + refund notice to patient; reminder 24 h before (both); reminder 1 h before with the meeting link (both); post-meeting review request to patient; payout sent to clinician; cancellation notices.
+**REQ-NOTIF-1** Transactional emails required for the MVP: clinician document approved/rejected; booking invite to clinician; booking confirmed (both parties, with `.ics`); booking declined/expired + refund notice to patient; reminder 24 h before (both); reminder 1 h before with the meeting link (both); post-meeting review request to patient; payout sent to clinician; cancellation notices.
 **REQ-NOTIF-2** Every email is enqueued as an `Email` record with a `dedupeKey`, so a redelivered subscription event cannot send a duplicate.
 **REQ-NOTIF-3** Sending failures retry with exponential backoff up to 5 attempts, then set `status = 'failed'` for admin visibility.
 **REQ-NOTIF-4** SMS and push notifications are out of scope for the MVP.
@@ -507,15 +509,15 @@ A static site. `index.html` holds a single `<socket-provider url="wss://saasufy.
 | --- | --- | --- |
 | `` | Home / hero search | Public |
 | `/search` | Results with filters | Public |
-| `/clinician/:profileId` | Public profile, credentials, availability calendar | Public |
+| `/clinician/:profileId` | Public profile, documents, availability calendar | Public |
 | `/book/:slotId` | Intake details + booking summary | Public until confirm |
 | `/auth/callback` | `<oauth-handler>` | Public |
 | `/checkout/:appointmentId` | Card payment via Pin.js hosted fields | `no-auth-redirect` |
 | `/booking/:appointmentId` | Status, meeting link, cancel | `no-auth-redirect` |
 | `/patient` | My appointments | `no-auth-redirect` |
-| `/clinician` | Dashboard: profile, credentials, availability, invites, earnings | `no-auth-redirect` |
+| `/clinician` | Dashboard: profile, documents, availability, invites, earnings | `no-auth-redirect` |
 | `/clinician/onboarding` | Guided setup checklist | `no-auth-redirect` |
-| `/admin/reviews` | Credential review queue | `no-auth-redirect`, admin-gated |
+| `/admin/reviews` | Document review queue | `no-auth-redirect`, admin-gated |
 
 The meeting link `/m/:token` and invite link `/invite/:token` are **served by the worker, not by `app-router`**, because they must work without a Saasufy session and must perform a server-side redirect.
 
@@ -534,7 +536,7 @@ The meeting link `/m/:token` and invite link `/invite/:token` are **served by th
 
 **REQ-NFR-1 · Security.** No secret may appear in client-served files. Pin Payments/Zoom/email credentials live only in the worker. The Saasufy admin API key stays in `.saasufy-api-key`, gitignored, never shipped.
 **REQ-NFR-2 · Data protection.** Intake reason and notes are health information. They are readable only by the two appointment owners, are excluded from all public views, and are never placed in email bodies beyond the patient's stated reason in the clinician invite.
-**REQ-NFR-3 · Credential documents** are never publicly readable and are served only through access-restricted `blob` fields.
+**REQ-NFR-3 · Documents** are public. They live on `blob` fields of a world-readable record whose id is exposed, so the `/files` URL is derivable by anyone; the field is `accessRead: allow` rather than pretending otherwise. Nothing that must stay private may be stored on a `Document`, and the practitioner is told at upload that the document becomes public once approved.
 **REQ-NFR-4 · Timezones.** Every stored instant is UTC epoch ms. Every displayed time is localised. DST correctness in slot materialisation is a release blocker.
 **REQ-NFR-5 · Money.** Integer cents only, single currency (AUD) for the MVP.
 **REQ-NFR-6 · Idempotency.** Every worker action is idempotent (REQ-ARCH-2). **Pin Payments does not offer idempotency keys**, so duplicate-charge protection must be enforced on our side: the worker only creates a charge when `pinChargeToken` is empty, and writes the token back before acknowledging the work. The same guard applies to refunds and transfers.
@@ -547,7 +549,7 @@ The meeting link `/m/:token` and invite link `/invite/:token` are **served by th
 
 ## 9. Out of scope for the MVP
 
-In-person appointments · multi-currency · recurring appointment packages · in-app chat/messaging · clinician-to-clinician referrals · insurance/Medicare claiming · prescriptions or clinical records · mobile apps · automated credential verification against registries · admin UI beyond the credential queue · SMS/push · group sessions · waitlists · promo codes · calendar sync (Google/Outlook) beyond `.ics` attachments.
+In-person appointments · multi-currency · recurring appointment packages · in-app chat/messaging · clinician-to-clinician referrals · insurance/Medicare claiming · prescriptions or clinical records · mobile apps · automated document verification against registries · admin UI beyond the document queue · SMS/push · group sessions · waitlists · promo codes · calendar sync (Google/Outlook) beyond `.ics` attachments.
 
 ---
 
@@ -559,7 +561,7 @@ In-person appointments · multi-currency · recurring appointment packages · in
 4. **Single currency AUD**, single market (Australia) for the MVP.
 5. **15% platform fee.**
 6. **Immediate capture with refund-on-decline** rather than authorisation-and-capture (REQ-BOOK-3).
-7. **Manual credential review** by an admin.
+7. **Manual document review** by an admin.
 8. `mynaturalclinic.com` is the production domain hosting the frontend and the worker's `/m`, `/invite` and `/pin/webhook` routes.
 9. Consultations are **online video only**.
 
@@ -594,7 +596,7 @@ In-person appointments · multi-currency · recurring appointment packages · in
 | **Search degrades as the marketplace grows** | Medium — accepted deliberately; the scan is proportional to the listed directory (§6.4.2) | Revisit at low tens of thousands of listed practitioners; the escape hatch is an indexed `multi` key field, documented in §6.4.2 |
 | **Pin balance too low to refund** — refunds and clinician transfers draw on the same balance and Pin returns 402 | High — a patient owed a refund does not get one | Retain a working float (REQ-PAY-3); treat 402 as retryable and alert; never sweep the balance to zero |
 | **Manual settlement schedule not set** in the Pin dashboard | High — every payout fails silently at launch | Launch checklist item (REQ-PAY-1); worker logs a loud startup warning if the balance is repeatedly zero |
-| **We hold clinicians' funds** in our own merchant balance, and we perform their KYC | High — financial-services and fraud exposure | Minimise hold time (REQ-PAY-6); manual identity check at credential review (REQ-CLIN-6); legal sign-off on D-8 before launch |
+| **We hold clinicians' funds** in our own merchant balance, and we perform their KYC | High — financial-services and fraud exposure | Minimise hold time (REQ-PAY-6); manual identity check at document review (REQ-CLIN-6); legal sign-off on D-8 before launch |
 | **No idempotency keys in the Pin API** — a retry can double-charge | High | Token-presence guards before every charge, refund and transfer (REQ-NFR-6) |
 | **Pin is AU/NZ only** | Medium — caps expansion | Accepted for the MVP; isolate payment calls behind one module so the provider can be swapped |
 | **Cold-start marketplace** (no clinicians ⇒ no patients) | High, commercial | Out of technical scope; seed supply before opening demand |
@@ -605,8 +607,8 @@ In-person appointments · multi-currency · recurring appointment packages · in
 
 A single end-to-end pass must succeed on production infrastructure:
 
-1. A clinician registers via Keycloak, verifies email, completes their profile, uploads a credential, submits payout bank details, and publishes availability.
-2. An admin approves the credential; the clinician becomes `listed`.
+1. A clinician registers via Keycloak, verifies email, completes their profile, uploads a document, submits payout bank details, and publishes availability.
+2. An admin approves the document; the clinician becomes `listed`.
 3. An anonymous visitor searches by ailment and date range and finds that clinician.
 4. The visitor selects a slot, enters intake details, signs up via Keycloak at the confirm step, and pays.
 5. The clinician receives the invite email and accepts.

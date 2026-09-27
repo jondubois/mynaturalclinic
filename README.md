@@ -2,7 +2,7 @@
 
 A marketplace for booking online consultations with natural therapists and clinicians.
 
-Patients search for practitioners by name, location, ailment or specialisation, and — most importantly — by when they are actually free. Browsing and searching require no account; a patient only signs up at the moment they commit to a booking. Clinicians go through a deliberately higher-friction path: they register, verify their email, submit academic and professional credentials for review, and publish their availability as a recurring weekly calendar with date-specific exceptions.
+Patients search for practitioners by name, location, ailment or specialisation, and — most importantly — by when they are actually free. Browsing and searching require no account; a patient only signs up at the moment they commit to a booking. Clinicians go through a deliberately higher-friction path: they register, verify their email, submit academic and professional documents for review, and publish their availability as a recurring weekly calendar with date-specific exceptions.
 
 The platform intermediates the relationship rather than just introducing the two parties. It issues the appointment invitation to the clinician, hosts the meeting link under its own domain, records attendance for both sides, takes the patient's payment up front, and releases funds to the clinician only once the consultation has actually taken place. That attendance record is what settles disputes.
 
@@ -119,7 +119,9 @@ curl -H "Authorization:Bearer $(cat .saasufy-api-key)" -H "Content-Type: applica
 | --- | --- |
 | `requirements.md` | Full MVP specification — data model, booking state machine, access control, open decisions |
 | `index.html` | The whole frontend — a single-page app built from Saasufy components, no build step |
-| `create-schema.py` | Creates/updates the nine Saasufy collections, indexes, views and access rules. Idempotent — safe to re-run, then deploy |
+| `create-schema.py` | Creates/updates the Saasufy collections, indexes, views and access rules. Idempotent — safe to re-run, then deploy |
+| `migrate-credentials-to-documents.py` | Copies every `Credential` record into `Document`, preserving ids. Idempotent; `--dry-run` reports without writing. Kept until `Credential` is dropped |
+| `migrate-qualificationname-to-documentname.py` | Copies `Document.qualificationName` into `documentName`. Idempotent; `--dry-run` reports without writing |
 | `seed-dev-data.py` | Seeds the topic vocabulary and a demo practitioner for local development |
 | `seed-practitioners.py` | Seeds ten sample practitioners and their weekly availability, spread across regions, specialisations and times of day |
 | `dev-access.py` | Temporarily relaxes write access for local development; `restore` puts the spec's rules back |

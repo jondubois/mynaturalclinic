@@ -49,7 +49,7 @@ OPEN = {'accessCreate': 'allow', 'accessRead': 'allow',
 SPEC = {
     'Clinician':    {'accessCreate': 'restrict', 'accessRead': 'allow',
                      'accessUpdate': 'restrict', 'accessDelete': 'block'},
-    'Credential':   {'accessCreate': 'restrict', 'accessRead': 'allow',
+    'Document':     {'accessCreate': 'restrict', 'accessRead': 'allow',
                      'accessUpdate': 'restrict', 'accessDelete': 'restrict'},
     'Availability': {'accessCreate': 'restrict', 'accessRead': 'restrict',
                      'accessUpdate': 'restrict', 'accessDelete': 'restrict'},
@@ -67,5 +67,5 @@ for name in SPEC:
 call('POST', 'service/start')
 print('deployed.')
 if mode == 'open':
-    print('\nWARNING: Clinician, Credential and Availability are now world-writable.')
+    print('\nWARNING: Clinician, Document and Availability are now world-writable.')
     print('Run  ./dev-access.py restore  when you are done.')
