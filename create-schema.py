@@ -255,6 +255,7 @@ fields(m, 'Clinician', [
     {'name': 'priceCurrency', 'type': S, 'max': 3, 'uppercase': True, 'defaultValue': 'AUD'},
     {'name': 'listingStatus', 'type': S, 'enum': 'draft,pending_review,listed,suspended',
      'defaultValue': 'draft'},
+    {'name': 'listingNote', 'type': S, 'max': 2000},
     {'name': 'contactEmail', 'type': S, 'email': True},
     {'name': 'pinRecipientToken', 'type': S, 'max': 200},
     {'name': 'payoutAccountLast4', 'type': S, 'max': 4},
@@ -294,9 +295,21 @@ views(m, [
     {'name': 'accountView', 'paramFields': 'accountId', 'primaryFields': 'accountId',
      'transformIndex': 'accountId', 'transformIndexOperation': 'equals',
      'transformIndexOperationInputA': '$paramFields.accountId'},
+    # The admin review panel. searchView cannot serve this: its ordering is a param
+    # but its direction is not, and flipping it would reverse patient search too.
+    {'name': 'reviewQueueView', 'paramFields': 'listingStatus', 'primaryFields': 'listingStatus',
+     'transformIndex': 'listingStatus', 'transformIndexOperation': 'equals',
+     'transformIndexOperationInputA': '$paramFields.listingStatus',
+     'transformOrderByField': 'updatedAt', 'transformOrderByDesc': True,
+     # listingNote is edited in place on that page; re-emitting the view on each
+     # keystroke would reorder the list under the cursor and drop focus.
+     'affectingFields': 'displayName,professionalTitle,city,region,contactEmail'},
 ])
 field_access(m, {
     'contactEmail':       {'accessRead': 'restrict', 'accessUpdate': 'restrict'},
+    # A rejection reason is for the practitioner and the admin group, not the public;
+    # the rest of the record is world-readable.
+    'listingNote':        {'accessRead': 'restrict'},
     'pinRecipientToken':  {'accessRead': 'restrict'},
     'payoutAccountLast4': {'accessRead': 'restrict'},
     'payoutStatus':       {'accessRead': 'restrict'},

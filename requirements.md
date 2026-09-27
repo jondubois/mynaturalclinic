@@ -146,7 +146,7 @@ Everything else — profile editing, search, dashboards — goes browser → Saa
 **REQ-CLIN-2** The clinician must supply, at minimum: display name, professional title, at least one `Topic`, country + state/region + city, timezone, consultation duration, price, a biography of ≥ 200 characters, and at least one document record.
 **REQ-CLIN-3** Each `Document` requires: type (`degree` | `diploma` | `certification` | `registration` | `licence` | `insurance`), issuing institution, qualification/document name, year awarded, and a supporting document upload (PDF or image, stored in a Saasufy `blob` field).
 **REQ-CLIN-4** A clinician's profile is only visible in patient search results when `listingStatus = 'listed'`, which requires **all** of: Keycloak email verified, profile complete per REQ-CLIN-2, at least one document with `reviewStatus = 'approved'`, a verified payout recipient (REQ-CLIN-6), and at least one future availability slot.
-**REQ-CLIN-5** Document review is manual for the MVP. An admin sets `reviewStatus` to `approved` or `rejected` with a `reviewNote`. The clinician sees the status and the note on their dashboard in realtime.
+**REQ-CLIN-5** Document review is manual for the MVP. An admin sets `reviewStatus` to `approved` or `rejected` with a `reviewNote`. The listing decision carries its own `listingNote` on `Clinician`, which is where a reason for not listing a practitioner goes. The clinician sees both statuses and both notes on their dashboard in realtime.
 **REQ-CLIN-6 · Payout details.** Pin Payments has **no hosted seller-onboarding product**. Clinicians do not hold their own Pin account; each is represented as a Pin **Recipient**, created from an email address plus Australian bank details (BSB and account number) that *we* collect in our own UI. Accordingly:
   - The bank details form is part of the clinician dashboard, submitted directly to Pin's `/recipients` endpoint via the worker. **Raw BSB and account numbers are never written to Saasufy** — only the returned `pinRecipientToken` and a masked last-four for display.
   - `payoutStatus` moves `none → pending → active` once Pin returns a recipient token; `restricted` if Pin rejects the details.
@@ -204,6 +204,7 @@ One row per practitioner. This is both the profile **and** the search listing �
 | **Listing** | | |
 | `listingStatus` | string | enum `draft,pending_review,listed,suspended` — **worker/admin write only** |
 | **Private fields — field-level `accessRead: restrict`** | | |
+| `listingNote` | string | The reviewer's reason for the current `listingStatus`. Read by the practitioner and the admin group only — a rejection reason must never appear on a public profile |
 | `contactEmail` | string | Never public |
 | `pinRecipientToken` | string | **worker write only** |
 | `payoutAccountLast4` | string | Owner-read only. Raw BSB/account number is never stored in Saasufy |

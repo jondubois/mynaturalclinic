@@ -751,12 +751,33 @@
                         <model-viewer
                           model-type="Clinician"
                           model-id="{{Clinician.id}}"
-                          model-fields="displayName,professionalTitle,bio,topics,country,region,city,timezone,priceAmount,consultationMinutes,listingStatus,payoutStatus"
+                          model-fields="displayName,professionalTitle,bio,topics,country,region,city,timezone,priceAmount,consultationMinutes,listingStatus,listingNote,payoutStatus"
                           type-alias="C"
                         >
                           <template slot="item">
                             <h1>{{C.listingStatus === 'listed' ? 'Your profile dashboard' : 'Your onboarding'}}</h1>
                             <p class="muted">{{C.listingStatus === 'listed' ? 'Your profile is live in patient search. Update any section below and the changes go out straight away.' : 'Everything below must be complete before your profile appears in patient search.'}}</p>
+
+                            <!-- Sits outside the listed/onboarding wording above, so a
+                                 suspension is surfaced whichever state it followed. -->
+                            <if-group show-content="{{C.listingStatus === 'suspended'}}">
+                              <template slot="content">
+                                <div class="err">
+                                  <strong>Your listing is suspended.</strong> Your profile is not
+                                  appearing in patient search and you cannot take new bookings.
+                                  <switch-group show-cases="why={{!!C.listingNote}},noWhy={{!C.listingNote}}">
+                                    <template slot="content" name="why">
+                                      <div style="margin-top:6px">Reason given by the reviewer: {{C.listingNote}}</div>
+                                    </template>
+                                    <template slot="content" name="noWhy">
+                                      <div style="margin-top:6px">No reason has been recorded yet.</div>
+                                    </template>
+                                    <div slot="viewport"></div>
+                                  </switch-group>
+                                </div>
+                              </template>
+                              <div slot="viewport"></div>
+                            </if-group>
 
                             <div class="card">
                               <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px">
@@ -1049,6 +1070,7 @@
               <div class="sub">Set by a reviewer once your profile and documents check out.</div>
               <table class="plain">
                 <tr><th>Listing status</th><td><model-text model-type="Clinician" model-id="{{Clinician.id}}" model-field="listingStatus"></model-text></td></tr>
+                <tr><th>Reviewer note</th><td><model-text model-type="Clinician" model-id="{{Clinician.id}}" model-field="listingNote" default-value="&#8212;"></model-text></td></tr>
                 <tr><th>Visible in search</th><td>Only while listing status is <code>listed</code>.</td></tr>
               </table>
             </div>
@@ -1374,7 +1396,7 @@
     <!-- ============================ ADMIN REVIEW QUEUE ============================ -->
     <template slot="page" route-path="/admin/reviews" no-auth-redirect="/clinician">
       <div class="wrap">
-        <h1>Document review</h1>
+        <h1>Review control panel</h1>
 
         <!-- Membership of the admin Group is what grants access here. The same
              group id is on every Document, so Saasufy enforces it server-side
@@ -1408,15 +1430,15 @@
               options="Draft=draft,In review=pending_review,Listed=listed,Suspended=suspended"
               value="pending_review"
               consumers=".listing-results:collection-view-params"
-              provider-template="listingStatus={{value}},query=,sortBy=displayName"
+              provider-template="listingStatus={{value}}"
             ></input-provider>
           </div>
           <collection-viewer
             class="listing-results"
             collection-type="Clinician"
             collection-fields="displayName,professionalTitle,city,region,contactEmail"
-            collection-view="searchView"
-            collection-view-params="listingStatus=pending_review,query=,sortBy=displayName"
+            collection-view="reviewQueueView"
+            collection-view-params="listingStatus=pending_review"
             collection-view-primary-fields="listingStatus"
             collection-page-size="25"
             auto-reset-page-offset
@@ -1433,6 +1455,10 @@
                     <model-input type="select" options="draft,pending_review,listed,suspended"
                       model-type="Clinician" model-id="{{Clinician.id}}"
                       model-field="listingStatus" show-error-message></model-input></label>
+                  <label class="f" style="margin:8px 0 0"><span class="lab">Note to practitioner</span>
+                    <model-input type="text" model-type="Clinician" model-id="{{Clinician.id}}"
+                      model-field="listingNote" placeholder="Reason, if not listing"
+                      show-error-message></model-input></label>
                 </div>
               </div>
             </template>
