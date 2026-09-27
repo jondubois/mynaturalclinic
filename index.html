@@ -221,10 +221,6 @@
     background-color:var(--accent-soft);background-position:center;
     background-size:cover;background-repeat:no-repeat}
   .avatar.sm{width:52px;height:52px;align-self:center}
-  /* Hold the avatar's 52px track on the wrapper too: the switch-group empties its
-     viewport while re-rendering, and an auto-width slot lets the row shift. */
-  .row .avatar-slot,.row .avatar-slot > [slot=viewport]{display:flex;flex:0 0 52px;width:52px}
-  .row .avatar-slot{align-self:center;min-height:52px}
 
   .hero{padding:44px 0 26px}
   .hero h1{font-size:2.3rem;max-width:18ch}
@@ -374,16 +370,8 @@
           >
             <template slot="item">
               <div class="row">
-                <!-- /files 404s on an empty blob, so gate on the field -->
-                <switch-group class="avatar-slot" show-cases="has={{!!Clinician.photo}},none={{!Clinician.photo}}">
-                  <template slot="content" name="has">
-                    <div class="avatar sm" style="background-image:url('{{Clinician.photo}}')"></div>
-                  </template>
-                  <template slot="content" name="none">
-                    <div class="avatar sm"></div>
-                  </template>
-                  <div slot="viewport"></div>
-                </switch-group>
+                <div class="avatar sm"
+                  style="background-image:{{Clinician.photo ? 'url(\'' + Clinician.photo + '\')' : 'none'}}"></div>
                 <div class="grow">
                   <div class="t"><a href="#/p/{{Clinician.id}}">{{Clinician.displayName}}</a></div>
                   <div class="d">{{Clinician.professionalTitle}} · {{Clinician.city}}</div>
@@ -533,15 +521,8 @@
           >
             <template slot="item">
               <div class="row">
-                <switch-group class="avatar-slot" show-cases="has={{!!Clinician.photo}},none={{!Clinician.photo}}">
-                  <template slot="content" name="has">
-                    <div class="avatar sm" style="background-image:url('{{Clinician.photo}}')"></div>
-                  </template>
-                  <template slot="content" name="none">
-                    <div class="avatar sm"></div>
-                  </template>
-                  <div slot="viewport"></div>
-                </switch-group>
+                <div class="avatar sm"
+                  style="background-image:{{Clinician.photo ? 'url(\'' + Clinician.photo + '\')' : 'none'}}"></div>
                 <div class="grow">
                   <div class="t"><a href="#/p/{{Clinician.id}}">{{Clinician.displayName}}</a></div>
                   <div class="d">{{Clinician.professionalTitle}} · {{Clinician.city}}</div>
