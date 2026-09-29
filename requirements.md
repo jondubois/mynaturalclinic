@@ -224,7 +224,7 @@ Access: `accessCreate: restrict`, `accessRead: allow`, `accessUpdate: restrict`,
 #### `Availability`
 The clinician's calendar input, merged into one collection because to a clinician it is one idea: "when I work".
 
-`accountId` (owner), `clinicianId`, `kind` (enum `weekly,dayOff,extra`), `dayOfWeek` (number 0–6, `weekly` only), `date` (number, local-midnight epoch, `dayOff`/`extra` only), `startMinute`, `endMinute` (minutes from local midnight), `effectiveFrom`, `effectiveUntil`, `active` (boolean).
+`accountId` (owner), `clinicianId`, `kind` (enum `weekly,dayOff,extra`), `startMinuteOfWeek` (number 0–10079), `endMinuteOfWeek` (number 1–11519, may run past the end of the week when a Saturday block crosses midnight; consumers take it modulo 10080) — minutes from *local* Sunday midnight, end exclusive, `weekly` only, `utcHourKeys` (string, `weekly` only — see REQ-SEARCH-8), `date` (number, local-midnight epoch, `dayOff`/`extra` only), `startMinuteOfDay`, `endMinuteOfDay` (minutes from local midnight, `dayOff`/`extra` only), `effectiveFrom`, `effectiveUntil`, `active` (boolean).
 
 *Trade-off:* one `kind` field means a few columns are unused per row, in exchange for one collection instead of two and a UI that maps to it directly. Worth it.
 
@@ -335,10 +335,12 @@ topics, price, language, name:
 removes them immediately. There is nothing derived to rebuild and no window in
 which the index disagrees with the record.
 
-**REQ-SEARCH-2 · No derived search fields.** The query runs against the fields
+**REQ-SEARCH-2 · One derived search field.** The query runs against the fields
 practitioners actually edit (`region`, `country`, `topics`, `priceAmount`,
 `languages`, `displayName`). Case-insensitive matching uses the query language's
-`(?i)` prefix rather than a lowercased duplicate of each field.
+`(?i)` prefix rather than a lowercased duplicate of each field. The single
+exception is `utcHours` (REQ-SEARCH-8), which must be derived because
+`Availability` is `accessRead: restrict` and views cannot join.
 
 **REQ-SEARCH-3 · Filters compose the phase-2 query.** Controls are
 `input-provider` elements whose values are query fragments — `region = nsw`,
@@ -359,6 +361,26 @@ changes.
 
 **REQ-SEARCH-7 · Realtime scope.** `collection-view-primary-fields` is
 `listingStatus`, so the view's realtime channel covers listed practitioners.
+
+**REQ-SEARCH-8 · Day and time-of-day are matched in UTC.** `Availability` is stored
+in the practitioner's local time (REQ-AVAIL-1). A weekly rule has no stable UTC form
+— "Monday 9am" in Sydney is 23:00 UTC for half the year and 22:00 for the other half
+— so UTC is derived, never stored on the rule itself:
+
+  - saving a block writes `utcHourKeys`, the `D-HH` UTC day-hours it covers;
+  - the `availabilityHours` aggregation joins those onto `Clinician.utcHours`;
+  - the browse filter converts the viewer's chosen day and band to the same keys and
+    matches with one `contains`, which compiles to a regex.
+
+Both sides emit keys for **both** offsets their zone uses across the year, so a DST
+zone reads one hour wide rather than drifting. Search therefore over-matches slightly
+and **must never under-match**. This margin applies to search only: slot
+materialisation (REQ-AVAIL-2) resolves the offset at each concrete date, where an
+hour of drift is a missed appointment rather than a wider filter.
+
+The browser is the only component with an IANA database, so it computes the keys;
+`tzkeys.py` mirrors the same arithmetic for the seed scripts and the two must stay in
+step.
 
 #### 6.4.2 What this trades away
 

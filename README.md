@@ -70,26 +70,79 @@ accepted, but the value the app **sends** must be a concrete URL.
 
 ## Searching by availability
 
-`Availability` is `accessRead: restrict`, so a patient browsing the site cannot read it, and a
-Saasufy view cannot join across models anyway. Four aggregation pipelines therefore roll each
-practitioner's weekly blocks up onto their own `Clinician` record, where `searchView`'s
-second-phase query can filter on them:
+Every stored *instant* is UTC (`TimeSlot.startAt`), but a weekly rule is not an instant — "every
+Monday 9am" in Sydney is 23:00 UTC for half the year and 22:00 for the other half, so there is no
+single UTC number to store. `Availability` therefore stays in the practitioner's local time, as
+minutes from local Sunday midnight, and UTC is *derived* for search only.
 
-| Field on `Clinician` | Holds |
+| Field | Holds |
 | --- | --- |
-| `availableDays` | Every weekday they work, e.g. `1,2,3,4,5` |
-| `morningDays` / `afternoonDays` / `eveningDays` | The same, narrowed to blocks overlapping 6am–12pm / 12–5pm / 5–10pm |
-| `earliestStartMinute`, `latestEndMinute` | Earliest start and latest end across the week |
-| `availabilityCount` | How many weekly blocks they have |
+| `Availability.startMinuteOfWeek` / `endMinuteOfWeek` | The block in local time, 0–10080 from Sunday 00:00, end exclusive |
+| `Availability.utcHourKeys` | The UTC day-hours it covers, as `D-HH` keys — `0-22,0-23,1-00,…` |
+| `Clinician.utcHours` | Every key of every weekly block, joined |
+| `Clinician.availabilityCount` | How many weekly blocks they have |
 
-All seven are written **only** by the aggregations (`create-schema.py`, bottom of the file) and
-are blocked for user writes. A band is an *overlap* test, so a 9am–1pm block counts as both a
-morning and an afternoon.
+One axis rather than `(dayOfWeek, minuteOfDay)` means a block may run past local midnight into the
+next day without being split in two.
 
-The three band fields exist so that a day and a time of day resolve to a **single** `contains`
-against **one** field — `morningDays contains 1` for "Monday mornings". The query language
-cannot intersect two fields, so filtering `availableDays` and a separate hours field together
-would return anyone who works Mondays and anyone who works mornings, not both at once.
+`Availability` is `accessRead: restrict`, so a patient browsing the site cannot read it, and a
+Saasufy view cannot join across models anyway — hence the rollup onto `Clinician`, where
+`searchView`'s second-phase query can reach it. Both `Clinician` fields are written **only** by
+the `availabilityHours` aggregation and are blocked for user writes.
+
+### Why hour keys rather than bands
+
+An earlier design bucketed each practitioner's hours into fixed `morningDays` / `afternoonDays` /
+`eveningDays` fields. That only works if the bucket boundaries are fixed in the frame the data is
+stored in: a viewer's 6am is a different UTC hour for every offset, so a pre-bucketed band cannot
+be queried from another timezone. Per-hour keys can — any local band from any zone maps onto a set
+of UTC hours.
+
+`contains` compiles to a regex match, so the whole set is still **one** term:
+
+```
+utcHours contains 0-19|0-20|0-21|0-22|0-23|1-00|1-01
+```
+
+A key is four characters wide and the `,` delimiter never appears in the pattern, so no match can
+straddle two keys.
+
+Keep that alternation **flat and unparenthesised**. `collection-view-params` is split client-side
+by `fieldPartsRegExp` (`saasufy-components/utils.js`), whose `\([^)]*\)` branch treats a
+parenthesised run as atomic and therefore cannot nest. Group the pattern as
+`(0-(06|07)|1-(06|07))` and each inner group is consumed on its own, leaving a trailing `)` that
+matches no branch — the scan stops one character short and the server receives an unbalanced
+regex. The symptom is a RethinkDB `missing ): ...` error naming a pattern that is visibly your
+own, minus its last character.
+
+### The DST margin
+
+The keys are computed by the browser, which is where the IANA database is — `Intl` with
+`timeZoneName: 'longOffset'` gives the offset for a zone on a given date. A single number still
+cannot hold both of a DST zone's answers, so both sides emit keys for **both** offsets their zone
+uses across the year:
+
+- **the practitioner's**, when a block is saved (`weeklyKeys` in `index.html`, `tzkeys.py` for the
+  seed scripts — the two must stay in step);
+- **the viewer's**, when the browse filter is built, because the 60-day booking horizon crosses a
+  transition and the query is built once, today.
+
+For a contiguous block that widens the match by one hour on one side, and not at all in a fixed
+zone — Perth, Brisbane and Darwin come out exact. Search therefore over-matches slightly and never
+under-matches, which is the right direction: the profile page shows real bookable instants anyway.
+Measured across seven practitioner zones and six viewer zones over a full year, including the
+half-hour zones: **no missed matches, 1.6% spurious**, against 2.5% missed and 6.2% spurious under
+the band scheme.
+
+A template can only read fields its `collection-viewer` actually fetched. `{{Clinician.timezone}}`
+resolves to empty — not an error — if `collection-fields` omits `timezone`, and an unrecognised
+zone name means the keys are silently computed at UTC. `weeklyKeys` therefore falls back to the
+browser's own zone rather than UTC, so the worst case is a practitioner who has travelled, not one
+filed ten hours out. `repair-availability-keys.py` recomputes the keys on every weekly row from
+each clinician's profile timezone; run it after a timezone change, and with `--apply` to write.
+
+Slot materialisation does **not** get this margin and must not — an hour of drift there is a
+patient at 9am and a practitioner at 10am. The worker resolves the offset at each concrete date.
 
 Each pipeline sets `useGroupAsId` (the group value, `clinicianId`, becomes the target record id,
 which is what lands the result on the matching `Clinician`), `updateOnly` (a dangling
@@ -99,11 +152,11 @@ delete your profile).
 **This needs a Saasufy build carrying the four aggregator fixes** (see the `saasufy` repo):
 concurrent writes to a shared target record are merged rather than replaced; the generation stamp
 is only claimed by an aggregation which purges; the rebuild queues are keyed by aggregation as
-well as target record, so aggregations sharing a target id no longer swallow each other's
-rebuilds; and an `updateOnly` aggregation follows its source records out of a group, so a deleted
-block clears the fields it fed. On an older build the symptom is fields that are individually
-correct but collectively incomplete — each practitioner missing whichever aggregation lost the
-race, stable across cycles, with `lastError` null because nothing actually fails.
+well as target record; and an `updateOnly` aggregation follows its source records out of a group,
+so a deleted block clears the fields it fed. Collapsing the four pipelines into one removes the
+shared-target race that made the first three visible here, but the last still bites: on an older
+build, deleting your only weekly block leaves `utcHours` behind and you stay in search results you
+no longer belong in, with `lastError` null because nothing actually fails.
 
 To fill in existing records after a schema change, deploy and then rebuild:
 

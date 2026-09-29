@@ -10,6 +10,7 @@ Account record, so nobody can log in as them. Real sign-ups create their own
 Clinician row through the app.
 """
 import json, urllib.request, os, uuid
+from tzkeys import weekly_keys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 KEY = open(os.path.join(ROOT, '.saasufy-api-key')).read().strip()
@@ -148,12 +149,15 @@ for name, blocks in HOURS.items():
                         f"view=clinicianView&viewParams[clinicianId]={clin['id']}"
                         '&pageSize=100').get('data', []):
         call('DELETE', f"Availability/{old_row['id'] if isinstance(old_row, dict) else old_row}")
+    tz = clin.get('timezone') or TZ[clin['region']]
     for days, start, end in blocks:
         for day in days:
             r = call('POST', 'Availability', {
                 'accountId': clin['accountId'], 'clinicianId': clin['id'],
-                'kind': 'weekly', 'dayOfWeek': day,
-                'startMinute': start, 'endMinute': end, 'active': True})
+                'kind': 'weekly',
+                'startMinuteOfWeek': day * 1440 + start,
+                'endMinuteOfWeek': day * 1440 + end,
+                'utcHourKeys': weekly_keys(day, start, end, tz), 'active': True})
             if str(r).startswith('ERR'): print(f'  {name} day {day}: {r}')
             else: rows += 1
 print(f'{rows} weekly availability rows')

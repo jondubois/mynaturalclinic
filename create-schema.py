@@ -146,6 +146,20 @@ def agg_rules(agg_id, kind, key_fields, specs):
             call('POST', kind, {'aggregationId': agg_id, **spec})
     print(f'    {kind}: {len(specs)}')
 
+def drop_fields(model_id, names):
+    have = existing_children('ModelField', model_id)
+    gone = [n for n in names if n in have]
+    for n in gone: call('DELETE', f'ModelField/{have[n]}')
+    print(f'    fields dropped: {len(gone)}')
+
+def drop_aggregations(target_model_id, names):
+    have = {a['aggregationName']: a['id'] for a in _page(
+        'Aggregation', {'view': 'accountModelAlphabeticalView',
+                        'viewParams[modelId]': target_model_id})}
+    gone = [n for n in names if n in have]
+    for n in gone: call('DELETE', f'Aggregation/{have[n]}')
+    print(f'  - Aggregations dropped: {len(gone)}')
+
 def rebuild(agg_id):
     import time
     call('PUT', f'Aggregation/{agg_id}', {'rebuildRequestedAt': int(time.time() * 1000)})
@@ -250,16 +264,15 @@ fields(m, 'Clinician', [
     {'name': 'emailVerified', 'type': B, 'defaultValue': 'false'},
     {'name': 'ratingAverage', 'type': N, 'defaultValue': '0'},
     {'name': 'ratingCount', 'type': N, 'integer': True, 'defaultValue': '0'},
-    {'name': 'availableDays', 'type': S, 'max': 200},
-    {'name': 'morningDays', 'type': S, 'max': 200},
-    {'name': 'afternoonDays', 'type': S, 'max': 200},
-    {'name': 'eveningDays', 'type': S, 'max': 200},
-    {'name': 'earliestStartMinute', 'type': N, 'integer': True},
-    {'name': 'latestEndMinute', 'type': N, 'integer': True},
+    # Every UTC day-hour this practitioner works, as comma-joined 'D-HH' keys.
+    # 168 possible keys at 5 bytes each.
+    {'name': 'utcHours', 'type': S, 'max': 1000},
     {'name': 'availabilityCount', 'type': N, 'integer': True},
     {'name': 'groupId', 'type': S, 'defaultValue': ADMIN_GROUP_ID,
      'accessCreate': 'block', 'accessUpdate': 'block'},
 ])
+drop_fields(m, ['availableDays', 'morningDays', 'afternoonDays', 'eveningDays',
+                'earliestStartMinute', 'latestEndMinute'])
 indexes(m, [
     {'name': 'listingStatus', 'fields': 'listingStatus'},
     {'name': 'accountId', 'fields': 'accountId'},
@@ -276,8 +289,7 @@ views(m, [
      'transformFilterType': 'advanced', 'transformFilterQuery': '$paramFields.query',
      'transformOrderByField': '$paramFields.sortBy', 'maxOffset': 500,
      'affectingFields': 'displayName,region,country,topics,priceAmount,listingStatus,'
-                        'availableDays,morningDays,afternoonDays,eveningDays,'
-                        'earliestStartMinute,latestEndMinute'},
+                        'utcHours'},
     {'name': 'accountView', 'paramFields': 'accountId', 'primaryFields': 'accountId',
      'transformIndex': 'accountId', 'transformIndexOperation': 'equals',
      'transformIndexOperationInputA': '$paramFields.accountId'},
@@ -300,8 +312,7 @@ field_access(m, {
     'payoutAccountLast4': {'accessRead': 'restrict'},
     'payoutStatus':       {'accessRead': 'restrict'},
     **{f: {'accessCreate': 'block', 'accessUpdate': 'block'} for f in (
-        'availableDays', 'morningDays', 'afternoonDays', 'eveningDays',
-        'earliestStartMinute', 'latestEndMinute', 'availabilityCount')},
+        'utcHours', 'availabilityCount')},
 })
 
 print('== Group / GroupMembership ==')
@@ -389,25 +400,37 @@ fields(m, 'Availability', [
     {'name': 'accountId', 'type': S, 'required': True},
     {'name': 'clinicianId', 'type': S, 'required': True},
     {'name': 'kind', 'type': S, 'enum': 'weekly,dayOff,extra', 'required': True},
-    {'name': 'dayOfWeek', 'type': N, 'integer': True, 'min': 0, 'max': 6},
+    # weekly: minutes from local Sunday 00:00, end exclusive. One axis rather than
+    # (dayOfWeek, minuteOfDay) so a block may run past local midnight into the next day.
+    # A Saturday-night block runs past the end of the week, hence the wider end bound;
+    # every consumer takes it modulo 10080.
+    {'name': 'startMinuteOfWeek', 'type': N, 'integer': True, 'min': 0, 'max': 10079},
+    {'name': 'endMinuteOfWeek', 'type': N, 'integer': True, 'min': 1, 'max': 11519},
+    # The UTC day-hours the block covers, at every offset its timezone uses across the
+    # year — so a DST zone reads one hour wide and never misses a match. Written by the
+    # clinician's own browser, which is where the IANA database is. See README.
+    {'name': 'utcHourKeys', 'type': S, 'max': 1000},
+    # dayOff / extra: a concrete local date plus minutes from local midnight on it.
     {'name': 'date', 'type': N},
-    {'name': 'startMinute', 'type': N, 'integer': True, 'min': 0, 'max': 1440},
-    {'name': 'endMinute', 'type': N, 'integer': True, 'min': 0, 'max': 1440},
+    {'name': 'startMinuteOfDay', 'type': N, 'integer': True, 'min': 0, 'max': 1440},
+    {'name': 'endMinuteOfDay', 'type': N, 'integer': True, 'min': 0, 'max': 1440},
     {'name': 'effectiveFrom', 'type': N},
     {'name': 'effectiveUntil', 'type': N},
     {'name': 'active', 'type': B, 'defaultValue': 'true'},
 ])
+drop_fields(m, ['dayOfWeek', 'startMinute', 'endMinute'])
 indexes(m, [{'name': 'clinicianId', 'fields': 'clinicianId'},
             {'name': 'accountId', 'fields': 'accountId'}])
 views(m, [
     {'name': 'clinicianView', 'paramFields': 'clinicianId', 'primaryFields': 'clinicianId',
      'transformIndex': 'clinicianId', 'transformIndexOperation': 'equals',
      'transformIndexOperationInputA': '$paramFields.clinicianId',
-     'transformOrderByField': 'dayOfWeek'},
+     'transformOrderByField': 'startMinuteOfWeek'},
     {'name': 'accountView', 'paramFields': 'accountId', 'primaryFields': 'accountId',
      'transformIndex': 'accountId', 'transformIndexOperation': 'equals',
      'transformIndexOperationInputA': '$paramFields.accountId',
-     'transformOrderByField': 'dayOfWeek', 'affectingFields': 'kind,startMinute,endMinute'},
+     'transformOrderByField': 'startMinuteOfWeek',
+     'affectingFields': 'kind,startMinuteOfWeek,endMinuteOfWeek,startMinuteOfDay,endMinuteOfDay'},
 ])
 
 print('== TimeSlot ==')
@@ -591,37 +614,25 @@ views(m, [
 ])
 
 print('== Availability -> Clinician aggregations ==')
-# Rolls weekly blocks onto the Clinician record so searchView can filter on them;
-# Availability itself is accessRead='restrict' and views cannot join. See README.
-ONTO_CLINICIAN = {'useGroupAsId': True, 'updateOnly': True, 'disablePurge': True}
-BY_CLINICIAN = [{'sourceField': 'clinicianId', 'operation': 'exact', 'targetField': 'id'}]
+# Rolls the weekly blocks' UTC hour keys onto the Clinician record so searchView can
+# filter on them; Availability itself is accessRead='restrict' and views cannot join.
+# The keys are already UTC, so a search converts the viewer's local day and time band
+# to UTC in the browser and matches against one field. See README.
+drop_aggregations(MODELS['Clinician'], ['availabilityDays', 'availabilityMorning',
+                                        'availabilityAfternoon', 'availabilityEvening'])
 
-# dayOff and extra rows carry no dayOfWeek to group by.
-WEEKLY = 'kind = weekly ~AND~ active = true'
-
-a = aggregation('availabilityDays', MODELS['Clinician'], MODELS['Availability'],
-                sourceFilterQuery=WEEKLY, **ONTO_CLINICIAN)
-agg_rules(a, 'AggregationGroupRule', ['sourceField'], BY_CLINICIAN)
+a = aggregation('availabilityHours', MODELS['Clinician'], MODELS['Availability'],
+                sourceFilterQuery='kind = weekly ~AND~ active = true',
+                useGroupAsId=True, updateOnly=True, disablePurge=True)
+agg_rules(a, 'AggregationGroupRule', ['sourceField'],
+          [{'sourceField': 'clinicianId', 'operation': 'exact', 'targetField': 'id'}])
+# 'join' does not dedupe, but the target is only ever tested with 'contains', so keys
+# repeated across overlapping blocks cost bytes and nothing else.
 agg_rules(a, 'AggregationAggregateRule', ['sourceField', 'operation'], [
-    {'sourceField': 'dayOfWeek', 'operation': 'join', 'stringOperand': ',',
-     'targetField': 'availableDays'},
-    {'sourceField': 'startMinute', 'operation': 'min', 'targetField': 'earliestStartMinute'},
-    {'sourceField': 'endMinute', 'operation': 'max', 'targetField': 'latestEndMinute'},
+    {'sourceField': 'utcHourKeys', 'operation': 'join', 'stringOperand': ',',
+     'targetField': 'utcHours'},
     {'sourceField': 'id', 'operation': 'count', 'targetField': 'availabilityCount'},
 ])
-
-for name, target, window in [
-    ('availabilityMorning',   'morningDays',   'startMinute < 720 ~AND~ endMinute > 360'),
-    ('availabilityAfternoon', 'afternoonDays', 'startMinute < 1020 ~AND~ endMinute > 720'),
-    ('availabilityEvening',   'eveningDays',   'startMinute < 1320 ~AND~ endMinute > 1020'),
-]:
-    a = aggregation(name, MODELS['Clinician'], MODELS['Availability'],
-                    sourceFilterQuery=f'{WEEKLY} ~AND~ {window}', **ONTO_CLINICIAN)
-    agg_rules(a, 'AggregationGroupRule', ['sourceField'], BY_CLINICIAN)
-    agg_rules(a, 'AggregationAggregateRule', ['sourceField', 'operation'], [
-        {'sourceField': 'dayOfWeek', 'operation': 'join', 'stringOperand': ',',
-         'targetField': target},
-    ])
 
 print('\nAll models created/updated.')
 print('Deploy, then rebuild the aggregations to fill in existing Clinician records:')

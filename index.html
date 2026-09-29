@@ -88,6 +88,14 @@
   model-input input,model-input textarea,model-input select,
   input-provider input,input-provider select{width:100%;font:inherit;color:inherit;
     background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 11px}
+  /* font:inherit hands an input the body's 1.6 line-height, while a select lays its text
+     out at normal in a box two pixels taller — which is why the two stood at different
+     heights side by side despite identical padding. Trimming the line-height and the
+     select's vertical padding brings both to 37px while each still centres its own text;
+     an explicit height does not, since a select will not recentre inside one.
+     textarea keeps the 1.6. */
+  input,model-input input,input-provider input{line-height:normal}
+  select,model-input select,input-provider select{padding-top:8px;padding-bottom:8px}
   /* Validation feedback. model-input appends .error-message-container and toggles
      .error / .hidden on it; collection-adder-form uses
      .collection-adder-field-error-container for per-field errors and puts .error or
@@ -177,6 +185,7 @@
   .row .t{font-weight:600}
   .row .d{color:var(--muted);font-size:.86rem}
   collection-deleter{cursor:pointer;color:var(--muted);font-size:1rem;padding:2px 6px;border-radius:6px}
+  .row.avail{align-items:center}
   collection-deleter:hover{color:var(--danger);background:#fbeded}
 
   .empty{color:var(--muted);text-align:center;padding:26px 0;font-size:.9rem}
@@ -271,6 +280,186 @@
   (function () {
     var q = new URLSearchParams(location.search);
     if (q.has('code') && q.has('state')) location.hash = '/auth/callback';
+  })();
+</script>
+
+<!-- Availability is stored in the practitioner's local time. UTC is derived here, the only
+     place with an IANA database. A key is 'D-HH' — UTC day 0-6, UTC hour 00-23. -->
+<script>
+  (function () {
+    var WEEK = 10080;
+    var DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    var FULL_DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday',
+                          'Thursday', 'Friday', 'Saturday'];
+    var BANDS = { morning: [6, 12], afternoon: [12, 17], evening: [17, 22] };
+
+    function offsetAt(timeZone, at) {
+      try {
+        var parts = new Intl.DateTimeFormat('en-US', {
+          timeZone: timeZone, timeZoneName: 'longOffset'
+        }).formatToParts(at);
+        for (var i = 0; i < parts.length; i++) {
+          if (parts[i].type !== 'timeZoneName') continue;
+          var m = /^GMT([+-])(\d\d):(\d\d)$/.exec(parts[i].value);
+          return m ? (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3])) : 0;
+        }
+      } catch (e) {}
+      return 0;
+    }
+
+    window.tzOffsetMinutes = offsetAt;
+
+    window.viewerTimeZone = function () {
+      try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; }
+      catch (e) { return 'UTC'; }
+    };
+
+    // One offset for a fixed zone, two for a DST one; January and July straddle
+    // every transition. Keys built from both read an hour wide rather than drift.
+    window.tzOffsets = function (timeZone) {
+      var year = new Date().getUTCFullYear();
+      var jan = offsetAt(timeZone, new Date(Date.UTC(year, 0, 15)));
+      var jul = offsetAt(timeZone, new Date(Date.UTC(year, 6, 15)));
+      return jan === jul ? [jan] : [jan, jul];
+    };
+
+    // Every UTC hour bucket a local [start, end) minute-of-week range touches. Walking
+    // UTC-aligned buckets keeps this right in the half-hour zones (Adelaide, Darwin).
+    window.utcHourKeys = function (start, end, offsets) {
+      var seen = {}, out = [];
+      for (var i = 0; i < offsets.length; i++) {
+        var from = start - offsets[i], to = end - offsets[i];
+        for (var m = Math.floor(from / 60) * 60; m < to; m += 60) {
+          var u = ((m % WEEK) + WEEK) % WEEK;
+          var key = Math.floor(u / 1440) + '-' + ('0' + (Math.floor(u / 60) % 24)).slice(-2);
+          if (!seen[key]) { seen[key] = true; out.push(key); }
+        }
+      }
+      return out.sort();
+    };
+
+    // 'contains' compiles to a regex match, so the whole set is one term. A key is
+    // four characters wide and the delimiter is not in the pattern, so no match can
+    // straddle two keys. Kept as a flat, paren-free alternation: collection-view-params
+    // splits on `fieldPartsRegExp`, whose `\([^)]*\)` branch cannot nest, so a grouped
+    // pattern loses its last `)` before it ever reaches the server.
+    window.utcHoursQuery = function (field, keys) {
+      var seen = {}, unique = [];
+      keys.forEach(function (key) {
+        if (!seen[key]) { seen[key] = true; unique.push(key); }
+      });
+      return unique.length ? field + ' contains ' + unique.sort().join('|') : '';
+    };
+
+    function zoneIsValid(timeZone) {
+      if (!timeZone) return false;
+      try { new Intl.DateTimeFormat('en-US', { timeZone: timeZone }); return true; }
+      catch (e) { return false; }
+    }
+
+    // The keys one weekly block contributes, for the hidden field on the adder form.
+    // A missing or unrecognised profile timezone must not quietly mean UTC — that files
+    // a Sydney practitioner's hours ten hours out. The browser's zone is the better guess.
+    window.weeklyKeys = function (day, startMinute, endMinute, timeZone) {
+      var zone = zoneIsValid(timeZone) ? timeZone : window.viewerTimeZone();
+      return window.utcHourKeys(day * 1440 + startMinute, day * 1440 + endMinute,
+                                window.tzOffsets(zone)).join(',');
+    };
+
+    // Browse: the viewer's chosen day and band, converted to UTC. Both of the viewer's
+    // offsets, for the same reason as the clinician's — the 60-day booking horizon
+    // crosses a DST transition, and the query is built once, today.
+    window.searchHoursQuery = function (day, band, timeZone) {
+      if (!day && !band) return '';
+      var span = BANDS[band] || [0, 24];
+      var days = day ? [Number(day)] : [0, 1, 2, 3, 4, 5, 6];
+      var offsets = window.tzOffsets(timeZone || window.viewerTimeZone());
+      var keys = [];
+      for (var i = 0; i < days.length; i++) {
+        keys = keys.concat(window.utcHourKeys(days[i] * 1440 + span[0] * 60,
+                                              days[i] * 1440 + span[1] * 60, offsets));
+      }
+      return window.utcHoursQuery('utcHours', keys);
+    };
+
+    // Which days a practitioner works, read back in the viewer's timezone.
+    window.localDaysLabel = function (utcHours) {
+      if (!utcHours) return 'No weekly hours listed';
+      var offset = offsetAt(window.viewerTimeZone(), new Date());
+      var seen = {};
+      utcHours.split(',').forEach(function (key) {
+        var day = Number(key.slice(0, 1)), hour = Number(key.slice(2));
+        if (isNaN(day) || isNaN(hour)) return;
+        var local = (((day * 1440 + hour * 60 + offset) % WEEK) + WEEK) % WEEK;
+        seen[Math.floor(local / 1440)] = true;
+      });
+      var label = [1, 2, 3, 4, 5, 6, 0].filter(function (day) { return seen[day]; })
+        .map(function (day) { return DAY_NAMES[day]; }).join(' ');
+      return label || 'No weekly hours listed';
+    };
+
+    window.weekdayName = function (minuteOfWeek) {
+      return FULL_DAY_NAMES[Math.floor(minuteOfWeek / 1440) % 7] || '';
+    };
+
+    window.clockOf = function (minute) {
+      var m = ((minute % 1440) + 1440) % 1440;
+      var hour = Math.floor(m / 60), past = m % 60;
+      return (hour % 12 || 12) + (past ? ':' + ('0' + past).slice(-2) : '') +
+        (hour < 12 ? 'am' : 'pm');
+    };
+
+    window.availabilityRange = function (entry) {
+      var weekly = entry.kind === 'weekly';
+      var start = weekly ? entry.startMinuteOfWeek : entry.startMinuteOfDay;
+      var end = weekly ? entry.endMinuteOfWeek : entry.endMinuteOfDay;
+      if (start == null || end == null) return '';
+      var label = window.clockOf(start) + ' – ' + window.clockOf(end);
+      if (weekly && Math.floor(end / 1440) !== Math.floor(start / 1440)) {
+        label += ' ' + window.weekdayName(end);
+      }
+      return label;
+    };
+
+    // Keeps the adder form's hidden model fields in step with its visible selects.
+    function syncWeeklyForm(form) {
+      var read = function (role) {
+        var select = form.querySelector('[data-role=' + role + ']');
+        return Number(select.options[select.selectedIndex].getAttribute('data-value'));
+      };
+      var day = read('day'), start = read('start'), end = read('end');
+      // An end at or before the start runs into the next day; minute-of-week holds that
+      // without splitting the block, which is why it is one axis.
+      if (end <= start) end += 1440;
+      var startOfWeek = day * 1440 + start, endOfWeek = day * 1440 + end;
+      form.querySelector('[name=startMinuteOfWeek]').value = startOfWeek;
+      form.querySelector('[name=endMinuteOfWeek]').value = endOfWeek;
+      form.querySelector('[name=utcHourKeys]').value =
+        window.weeklyKeys(day, start, end, form.getAttribute('data-timezone'));
+      var summary = form.querySelector('[data-role=summary]');
+      if (summary) {
+        var spansDays = Math.floor(endOfWeek / 1440) !== day;
+        summary.textContent = 'Saves as ' + window.weekdayName(startOfWeek) + ' ' +
+          window.clockOf(startOfWeek) + ' \u2013 ' + window.clockOf(endOfWeek) +
+          (spansDays ? ' ' + window.weekdayName(endOfWeek) : '');
+      }
+    }
+
+    function weeklyFormOf(node) {
+      return node && node.closest ? node.closest('.weekly-hours') : null;
+    }
+
+    document.addEventListener('change', function (e) {
+      var form = weeklyFormOf(e.target);
+      if (form) syncWeeklyForm(form);
+    });
+    // Capture on the submit button rather than the submit event, which does not cross
+    // the component's shadow boundary. Also re-reads the selects after a form reset.
+    document.addEventListener('click', function (e) {
+      if (!e.target || e.target.type !== 'submit') return;
+      var form = weeklyFormOf(e.target);
+      if (form) syncWeeklyForm(form);
+    }, true);
   })();
 </script>
 
@@ -442,6 +631,7 @@
                 consumers=".search-combiner"
               ></input-provider></label>
           </div>
+          <div class="sub">Days and times are in your timezone ({{viewerTimeZone()}}).</div>
 
           <div class="toolbar">
             <label class="f" style="margin:0;flex:1"><span class="lab">Search</span>
@@ -473,11 +663,10 @@
               ></input-provider></label>
           </div>
 
-          <!-- a bare band matches any weekday, hence [0-6] -->
           <input-combiner
             class="search-combiner"
             consumers=".search-results:collection-view-params"
-            provider-template="listingStatus=listed,query={{[value.region, value.specialty, value.text, (function (day, band) { if (!day && !band) return ''; var field = band === 'morning' ? 'morningDays' : band === 'afternoon' ? 'afternoonDays' : band === 'evening' ? 'eveningDays' : 'availableDays'; return field + ' contains ' + (day || '[0-6]'); })(value.day, value.band)].filter(Boolean).join(' ~AND~ ')}},sortBy={{value.sort || 'displayName'}}"
+            provider-template="listingStatus=listed,query={{[value.region, value.specialty, value.text, searchHoursQuery(value.day, value.band)].filter(Boolean).join(' ~AND~ ')}},sortBy={{value.sort || 'displayName'}}"
           ></input-combiner>
 
             <collection-reducer
@@ -523,7 +712,7 @@
           <collection-viewer
             class="search-results"
             collection-type="Clinician"
-            collection-fields="displayName,professionalTitle,city,priceAmount,consultationMinutes,photo,availableDays,earliestStartMinute,latestEndMinute"
+            collection-fields="displayName,professionalTitle,city,priceAmount,consultationMinutes,photo,utcHours"
             collection-view="searchView"
             collection-view-params="listingStatus=listed,query=,sortBy=displayName"
             collection-view-primary-fields="listingStatus"
@@ -537,21 +726,7 @@
                 <div class="grow">
                   <div class="t"><a href="#/p/{{Clinician.id}}">{{Clinician.displayName}}</a></div>
                   <div class="d">{{Clinician.professionalTitle}} · {{Clinician.city}}</div>
-                  <div class="d small muted">{{(function (days, from, until) {
-                    if (!days) return 'No weekly hours listed';
-                    var names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-                    var listed = String(days).split(',');
-                    var label = [1, 2, 3, 4, 5, 6, 0].filter(function (day) {
-                      return listed.indexOf(String(day)) > -1;
-                    }).map(function (day) { return names[day]; }).join(' ');
-                    var clock = function (minute) {
-                      var hour = Math.floor(minute / 60), past = minute % 60;
-                      return (hour % 12 || 12) + (past ? ':' + (past < 10 ? '0' : '') + past : '') +
-                        (hour < 12 ? 'am' : 'pm');
-                    };
-                    if (from == null || until == null) return label;
-                    return label + ' · ' + clock(from) + '-' + clock(until);
-                  })(Clinician.availableDays, Clinician.earliestStartMinute, Clinician.latestEndMinute)}}</div>
+                  <div class="d small muted">{{localDaysLabel(Clinician.utcHours)}}</div>
                 </div>
                 <div class="small muted">${{Clinician.priceAmount / 100}} / {{Clinician.consultationMinutes}} min</div>
               </div>
@@ -1198,29 +1373,18 @@
           <h2>Current schedule</h2>
           <collection-viewer
             collection-type="Availability"
-            collection-fields="kind,dayOfWeek,date,startMinute,endMinute,active"
+            collection-fields="kind,startMinuteOfWeek,endMinuteOfWeek,date,startMinuteOfDay,endMinuteOfDay,active"
             collection-view="accountView"
             collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
             collection-view-primary-fields="accountId"
             collection-page-size="50"
           >
             <template slot="item">
-              <div class="row">
+              <div class="row avail">
                 <div class="grow">
                   <switch-group show-cases="w={{Availability.kind === 'weekly'}},o={{Availability.kind === 'dayOff'}},e={{Availability.kind === 'extra'}}">
                     <template slot="content" name="w">
-                      <div class="t">
-                        <switch-group show-cases="d0={{Availability.dayOfWeek === 0}},d1={{Availability.dayOfWeek === 1}},d2={{Availability.dayOfWeek === 2}},d3={{Availability.dayOfWeek === 3}},d4={{Availability.dayOfWeek === 4}},d5={{Availability.dayOfWeek === 5}},d6={{Availability.dayOfWeek === 6}}">
-                          <template slot="content" name="d0">Sunday</template>
-                          <template slot="content" name="d1">Monday</template>
-                          <template slot="content" name="d2">Tuesday</template>
-                          <template slot="content" name="d3">Wednesday</template>
-                          <template slot="content" name="d4">Thursday</template>
-                          <template slot="content" name="d5">Friday</template>
-                          <template slot="content" name="d6">Saturday</template>
-                          <div slot="viewport"></div>
-                        </switch-group>
-                      </div>
+                      <div class="t">{{weekdayName(Availability.startMinuteOfWeek)}}</div>
                       <div class="d">Every week</div>
                     </template>
                     <template slot="content" name="o">
@@ -1234,9 +1398,7 @@
                     <div slot="viewport"></div>
                   </switch-group>
                 </div>
-                <div class="small muted">
-                  {{Availability.startMinute / 60}}:00 &ndash; {{Availability.endMinute / 60}}:00
-                </div>
+                <div class="small muted">{{availabilityRange(Availability)}}</div>
                 <collection-deleter model-id="{{Availability.id}}"
                   confirm-message="Remove this availability entry?"
                   onclick="confirmDeleteItem()">&#x2715;</collection-deleter>
@@ -1252,7 +1414,7 @@
 
         <collection-viewer
           collection-type="Clinician"
-          collection-fields="accountId"
+          collection-fields="accountId,timezone"
           collection-view="accountView"
           collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
           collection-view-primary-fields="accountId"
@@ -1262,48 +1424,69 @@
             <div class="note">
               Times are in your profile timezone
               (<model-text model-type="Clinician" model-id="{{Clinician.id}}" model-field="timezone"
-                default-value="not set"></model-text>). Stored as minutes from local midnight.
-              Whole hours only for now — half-hour starts need a formatting helper in the template.
+                default-value="not set — this browser's timezone is used until you set one"></model-text>),
+              stored as minutes from local Sunday midnight.
+              Patients searching from elsewhere see them converted to their own timezone.
+              An end at or before the start means the next day, so 8pm–2am is one block.
+              Whole hours only for now; the clock helper handles any minute, so finer steps are
+              just more options.
             </div>
 
             <div class="card">
               <h2>Add weekly hours</h2>
               <div class="sub">The hours you normally work on a given day.</div>
               <collection-adder-form
+                class="weekly-hours notice"
+                data-timezone="{{Clinician.timezone}}"
                 collection-type="Availability"
                 model-values="accountId={{socket.authToken ? socket.authToken.accountId : ''}},clinicianId={{Clinician.id}},kind=weekly,active:boolean=true"
                 computable-model-values
-                success-message="Added."
+                success-message="Added — it is now in your schedule above. You can add as many blocks as you need."
                 show-field-errors
               >
                 <div slot="message"></div>
+                <!-- The hidden fields below are what gets stored; a change handler keeps them
+                     in step with the selects. The selects hold their numbers in data-value
+                     because collection-adder-form submits every control that has a value,
+                     named or not, and an empty field name is rejected by the schema. -->
+                <input type="hidden" name="startMinuteOfWeek" output-type="number" value="1980">
+                <input type="hidden" name="endMinuteOfWeek" output-type="number" value="2460">
+                <input type="hidden" name="utcHourKeys"
+                  value="{{weeklyKeys(1, 540, 1020, Clinician.timezone)}}">
                 <div class="grid2">
                   <label class="f"><span class="lab">Day</span>
-                    <select name="dayOfWeek" output-type="number">
-                      <option value="1">Monday</option><option value="2">Tuesday</option>
-                      <option value="3">Wednesday</option><option value="4">Thursday</option>
-                      <option value="5">Friday</option><option value="6">Saturday</option>
-                      <option value="0">Sunday</option>
+                    <select data-role="day">
+                      <option data-value="1" value="">Monday</option><option data-value="2" value="">Tuesday</option>
+                      <option data-value="3" value="">Wednesday</option><option data-value="4" value="">Thursday</option>
+                      <option data-value="5" value="">Friday</option><option data-value="6" value="">Saturday</option>
+                      <option data-value="0" value="">Sunday</option>
                     </select></label>
                   <label class="f"><span class="lab">&nbsp;</span>
                     <input class="btn" type="submit" value="Add weekly hours"></label>
                   <label class="f"><span class="lab">Starts at</span>
-                    <select name="startMinute" output-type="number">
-                      <option value="360">6:00 am</option><option value="420">7:00 am</option>
-                      <option value="480">8:00 am</option><option value="540" selected>9:00 am</option>
-                      <option value="600">10:00 am</option><option value="660">11:00 am</option>
-                      <option value="720">12:00 pm</option><option value="780">1:00 pm</option>
-                      <option value="840">2:00 pm</option><option value="900">3:00 pm</option>
+                    <select data-role="start">
+                      <option data-value="0" value="">12:00 am</option><option data-value="60" value="">1:00 am</option><option data-value="120" value="">2:00 am</option>
+                      <option data-value="180" value="">3:00 am</option><option data-value="240" value="">4:00 am</option><option data-value="300" value="">5:00 am</option>
+                      <option data-value="360" value="">6:00 am</option><option data-value="420" value="">7:00 am</option><option data-value="480" value="">8:00 am</option>
+                      <option data-value="540" value="" selected>9:00 am</option><option data-value="600" value="">10:00 am</option><option data-value="660" value="">11:00 am</option>
+                      <option data-value="720" value="">12:00 pm</option><option data-value="780" value="">1:00 pm</option><option data-value="840" value="">2:00 pm</option>
+                      <option data-value="900" value="">3:00 pm</option><option data-value="960" value="">4:00 pm</option><option data-value="1020" value="">5:00 pm</option>
+                      <option data-value="1080" value="">6:00 pm</option><option data-value="1140" value="">7:00 pm</option><option data-value="1200" value="">8:00 pm</option>
+                      <option data-value="1260" value="">9:00 pm</option><option data-value="1320" value="">10:00 pm</option><option data-value="1380" value="">11:00 pm</option>
                     </select></label>
                   <label class="f"><span class="lab">Ends at</span>
-                    <select name="endMinute" output-type="number">
-                      <option value="720">12:00 pm</option><option value="780">1:00 pm</option>
-                      <option value="840">2:00 pm</option><option value="900">3:00 pm</option>
-                      <option value="960">4:00 pm</option><option value="1020" selected>5:00 pm</option>
-                      <option value="1080">6:00 pm</option><option value="1140">7:00 pm</option>
-                      <option value="1200">8:00 pm</option><option value="1260">9:00 pm</option>
+                    <select data-role="end">
+                      <option data-value="0" value="">12:00 am</option><option data-value="60" value="">1:00 am</option><option data-value="120" value="">2:00 am</option>
+                      <option data-value="180" value="">3:00 am</option><option data-value="240" value="">4:00 am</option><option data-value="300" value="">5:00 am</option>
+                      <option data-value="360" value="">6:00 am</option><option data-value="420" value="">7:00 am</option><option data-value="480" value="">8:00 am</option>
+                      <option data-value="540" value="">9:00 am</option><option data-value="600" value="">10:00 am</option><option data-value="660" value="">11:00 am</option>
+                      <option data-value="720" value="">12:00 pm</option><option data-value="780" value="">1:00 pm</option><option data-value="840" value="">2:00 pm</option>
+                      <option data-value="900" value="">3:00 pm</option><option data-value="960" value="">4:00 pm</option><option data-value="1020" value="" selected>5:00 pm</option>
+                      <option data-value="1080" value="">6:00 pm</option><option data-value="1140" value="">7:00 pm</option><option data-value="1200" value="">8:00 pm</option>
+                      <option data-value="1260" value="">9:00 pm</option><option data-value="1320" value="">10:00 pm</option><option data-value="1380" value="">11:00 pm</option>
                     </select></label>
                 </div>
+                <div class="small muted" data-role="summary"></div>
               </collection-adder-form>
             </div>
 
@@ -1311,10 +1494,11 @@
               <h2>Block out a day</h2>
               <div class="sub">Overrides your weekly pattern for a single date.</div>
               <collection-adder-form
+                class="notice"
                 collection-type="Availability"
-                model-values="accountId={{socket.authToken ? socket.authToken.accountId : ''}},clinicianId={{Clinician.id}},kind=dayOff,startMinute:number=0,endMinute:number=1440,active:boolean=true"
+                model-values="accountId={{socket.authToken ? socket.authToken.accountId : ''}},clinicianId={{Clinician.id}},kind=dayOff,startMinuteOfDay:number=0,endMinuteOfDay:number=1440,active:boolean=true"
                 computable-model-values
-                success-message="Day blocked."
+                success-message="Day blocked — it is now in your schedule above."
                 show-field-errors
               >
                 <div slot="message"></div>

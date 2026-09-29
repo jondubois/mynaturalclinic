@@ -3,6 +3,7 @@
 Writes go through the Admin/Service HTTP API, which associates them with the account
 in .saasufy-dev-account (set as serviceAccountId on the API credential)."""
 import json, urllib.request, os
+from tzkeys import weekly_keys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 KEY = open(os.path.join(ROOT, '.saasufy-api-key')).read().strip()
@@ -65,11 +66,11 @@ for t, inst, qual, yr, st, note in [
     print(f'  {qual[:44]:46s} {st}' if not str(r).startswith('ERR') else f'  {r}')
 
 print('\nseeding availability...')
-for day in (1,2,3,4):
+TZ = 'Australia/Sydney'
+for day, start, end in [(d, 9*60, 17*60) for d in (1,2,3,4)] + [(5, 9*60, 13*60)]:
     call('POST','Availability', dict(accountId=ACCOUNT, clinicianId=clin, kind='weekly',
-         dayOfWeek=day, startMinute=9*60, endMinute=17*60, active=True))
-call('POST','Availability', dict(accountId=ACCOUNT, clinicianId=clin, kind='weekly',
-     dayOfWeek=5, startMinute=9*60, endMinute=13*60, active=True))
+         startMinuteOfWeek=day*1440+start, endMinuteOfWeek=day*1440+end,
+         utcHourKeys=weekly_keys(day, start, end, TZ), active=True))
 print('  5 weekly rules (Mon-Thu 9-5, Fri 9-1)')
 
 print('\nverify accountId association on a seeded record:')
