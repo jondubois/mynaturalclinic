@@ -123,6 +123,7 @@ curl -H "Authorization:Bearer $(cat .saasufy-api-key)" -H "Content-Type: applica
 | `migrate-credentials-to-documents.py` | Copies every `Credential` record into `Document`, preserving ids. Idempotent; `--dry-run` reports without writing. Kept until `Credential` is dropped |
 | `migrate-qualificationname-to-documentname.py` | Copies `Document.qualificationName` into `documentName`. Idempotent; `--dry-run` reports without writing |
 | `seed-dev-data.py` | Seeds the topic vocabulary and a demo practitioner for local development |
+| `seed-categories.py` | Seeds the `Category` rows behind the `/browse` dropdowns and the profile topic list. Wipes and reseeds, so it is the source of truth for that table |
 | `seed-practitioners.py` | Seeds ten sample practitioners and their weekly availability, spread across regions, specialisations and times of day |
 | `dev-access.py` | Temporarily relaxes write access for local development; `restore` puts the spec's rules back |
 | `deploy.py` | Rewrites the dev URLs in `index.html` to the deployed URL and uploads it to Saasufy's file hosting. Strips indentation to stay under the API's 100 KiB request-body limit, which base64 hits well before the field's own `max`; `--dry-run` reports without uploading |

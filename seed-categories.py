@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed the SearchCategory table that populates the /browse dropdowns.
+"""Seed the Category table that populates the /browse dropdowns.
 
 Categories are levelled: level 1 is where the practitioner is, level 2 is what
 they treat. Each level drives its own select, and the two are combined into a
@@ -30,36 +30,38 @@ def call(m, path, body=None, qs=''):
 REGIONS = [('New South Wales','nsw'), ('Victoria','vic'), ('Queensland','qld'),
            ('Western Australia','wa'), ('South Australia','sa'), ('Tasmania','tas'),
            ('Australian Capital Territory','act'), ('Northern Territory','nt')]
+# Consultations are online only, so hands-on modalities (acupuncture, remedial
+# massage, kinesiology) are not offered as search categories. Chinese Medicine
+# stays: its herbal division is prescription-based and works over video.
 SPECIALISATIONS = [('Naturopathy','naturopathy'), ('Nutrition','nutrition'),
-                   ('Acupuncture','acupuncture'), ('Herbal Medicine','herbal-medicine'),
-                   ('Homeopathy','homeopathy'), ('Remedial Massage','remedial-massage'),
-                   ('Chinese Medicine','chinese-medicine'), ('Kinesiology','kinesiology')]
+                   ('Herbal Medicine','herbal-medicine'), ('Homeopathy','homeopathy'),
+                   ('Chinese Medicine','chinese-medicine')]
 AILMENTS = [('Anxiety','anxiety'), ('Digestive Health','digestive-health'),
             ('Fatigue','fatigue'), ('Sleep Problems','sleep-problems'),
             ('Hormonal Health','hormonal-health'), ('Chronic Pain','chronic-pain'),
             ('Skin Conditions','skin-conditions'), ('Immune Support','immune-support')]
 
-rows = []   # (label, query, kind, position, level)
+rows = []   # (label, slug, query, kind, position, level)
 for i, (label, slug) in enumerate(REGIONS):
-    rows.append((label, f'region = {slug}', 'region', 10 + i, 1))
+    rows.append((label, slug, f'region = {slug}', 'region', 10 + i, 1))
 for i, (label, slug) in enumerate(SPECIALISATIONS):
-    rows.append((label, f'topics contains (?i){slug}', 'specialisation', 100 + i, 2))
+    rows.append((label, slug, f'topics contains (?i){slug}', 'specialisation', 100 + i, 2))
 for i, (label, slug) in enumerate(AILMENTS):
-    rows.append((label, f'topics contains (?i){slug}', 'ailment', 200 + i, 2))
+    rows.append((label, slug, f'topics contains (?i){slug}', 'ailment', 200 + i, 2))
 
 removed = 0
 while True:
-    batch = call('GET', 'SearchCategory', None, 'pageSize=100').get('data', [])
+    batch = call('GET', 'Category', None, 'pageSize=100').get('data', [])
     if not batch: break
     for x in batch:
-        call('DELETE', f"SearchCategory/{x['id'] if isinstance(x, dict) else x}")
+        call('DELETE', f"Category/{x['id'] if isinstance(x, dict) else x}")
         removed += 1
 print(f'removed {removed} existing categor(ies)')
 
-for label, query, kind, position, level in rows:
+for label, slug, query, kind, position, level in rows:
     assert ',' not in label and ':' not in label, f'bad label: {label}'
-    r = call('POST', 'SearchCategory',
-             {'label': label, 'query': query, 'kind': kind,
+    r = call('POST', 'Category',
+             {'label': label, 'slug': slug, 'query': query, 'kind': kind,
               'position': position, 'level': level})
     if str(r).startswith('ERR'):
         print(' ', label, r)

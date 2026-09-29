@@ -154,27 +154,6 @@ S, N, B = 'string', 'number', 'boolean'
 ADMIN_GROUP_ID = '620af869-cb09-4a20-bcf4-ed10510b3367'   # the 'admin' Group record; see README
 OWNER = {'accessTokenAuthField': 'accountId', 'accessModelAuthField': 'accountId'}
 
-print('== Topic ==')
-m = model('Topic', 1, accessCreate='block', accessRead='allow',
-          accessUpdate='block', accessDelete='block')
-fields(m, 'Topic', [
-    {'name': 'name', 'type': S, 'required': True, 'max': 100},
-    {'name': 'slug', 'type': S, 'required': True, 'max': 100, 'lowercase': True},
-    {'name': 'kind', 'type': S, 'enum': 'specialisation,ailment', 'required': True},
-    {'name': 'synonyms', 'type': S, 'multi': True, 'maxCardinality': 20},
-    {'name': 'active', 'type': B, 'defaultValue': 'true'},
-])
-indexes(m, [{'name': 'slug', 'fields': 'slug'},
-            {'name': 'kindName', 'fields': 'kind,name'}])
-views(m, [
-    {'name': 'alphabeticalView', 'paramFields': '', 'primaryFields': '',
-     'transformOrderByField': 'name'},
-    {'name': 'kindView', 'paramFields': 'kind', 'primaryFields': 'kind',
-     'transformIndex': 'kind', 'transformIndexOperation': 'equals',
-     'transformIndexOperationInputA': '$paramFields.kind',
-     'transformOrderByField': 'name'},
-])
-
 print('== Account (Saasufy auth table) ==')
 # The Account table is created and populated by Saasufy's auth layer on every
 # successful login — clients can never create records in it. Declaring the Model,
@@ -199,15 +178,18 @@ fields(m, 'Account', [
 indexes(m, [{'name': 'username', 'fields': 'username'},
             {'name': 'email', 'fields': 'email'}])
 
-print('== SearchCategory ==')
+print('== Category ==')
 # Drives the /browse dropdown. Each row pairs the label a patient sees with the
 # phase-2 filter query it applies to searchView, so adding a category is a data
-# change rather than a code change. Seeded by seed-search-categories.py.
-m = model('SearchCategory', 10, accessCreate='block', accessRead='allow',
+# change rather than a code change. Seeded by seed-categories.py.
+m = model('Category', 10, accessCreate='block', accessRead='allow',
           accessUpdate='block', accessDelete='block')
-fields(m, 'SearchCategory', [
+fields(m, 'Category', [
     {'name': 'label', 'type': S, 'max': 100},
     {'name': 'query', 'type': S, 'max': 300},
+    # The bare value the query matches on. Carried separately so a consumer does
+    # not have to parse it back out of the query fragment.
+    {'name': 'slug', 'type': S, 'max': 100},
     {'name': 'kind', 'type': S, 'enum': 'region,specialisation,ailment'},
     {'name': 'position', 'type': N, 'integer': True},
     # 1 = where the practitioner is, 2 = what they treat. Each level drives its
@@ -220,6 +202,10 @@ views(m, [
     {'name': 'levelView', 'paramFields': 'level', 'primaryFields': 'level',
      'transformIndex': 'level', 'transformIndexOperation': 'equals',
      'transformIndexOperationInputA': '$paramFields.level',
+     'transformOrderByField': 'position'},
+    {'name': 'kindView', 'paramFields': 'kind', 'primaryFields': 'kind',
+     'transformIndex': 'kind', 'transformIndexOperation': 'equals',
+     'transformIndexOperationInputA': '$paramFields.kind',
      'transformOrderByField': 'position'},
 ])
 

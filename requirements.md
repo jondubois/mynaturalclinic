@@ -143,7 +143,7 @@ Everything else — profile editing, search, dashboards — goes browser → Saa
 ### 4.3 Clinician onboarding — high friction, deliberately
 
 **REQ-CLIN-1** A clinician must register through Keycloak and **complete Keycloak email verification** before a `Clinician` can move beyond `draft`.
-**REQ-CLIN-2** The clinician must supply, at minimum: display name, professional title, at least one `Topic`, country + state/region + city, timezone, consultation duration, price, a biography of ≥ 200 characters, and at least one document record.
+**REQ-CLIN-2** The clinician must supply, at minimum: display name, professional title, at least one topic from `Category`, country + state/region + city, timezone, consultation duration, price, a biography of ≥ 200 characters, and at least one document record.
 **REQ-CLIN-3** Each `Document` requires: type (`degree` | `diploma` | `certification` | `registration` | `licence` | `insurance`), issuing institution, qualification/document name, year awarded, and a supporting document upload (PDF or image, stored in a Saasufy `blob` field).
 **REQ-CLIN-4** A clinician's profile is only visible in patient search results when `listingStatus = 'listed'`, which requires **all** of: Keycloak email verified, profile complete per REQ-CLIN-2, at least one document with `reviewStatus = 'approved'`, a verified payout recipient (REQ-CLIN-6), and at least one future availability slot.
 **REQ-CLIN-5** Document review is manual for the MVP. An admin sets `reviewStatus` to `approved` or `rejected` with a `reviewNote`. The listing decision carries its own `listingNote` on `Clinician`, which is where a reason for not listing a practitioner goes. The clinician sees both statuses and both notes on their dashboard in realtime.
@@ -177,7 +177,6 @@ Everything else — profile editing, search, dashboards — goes browser → Saa
 | `Appointment` | A booking between a patient and a clinician. |
 | `Attendance` | A record that someone turned up to a meeting. |
 | `Review` | A patient's rating of a consultation. |
-| `Topic` | A specialisation or health concern that people can search by. |
 | `Email` | An email the system still needs to send. |
 
 Nine collections, plus Saasufy's built-in `Group` / `GroupMembership` which the MVP does not use.
@@ -194,7 +193,7 @@ One row per practitioner. This is both the profile **and** the search listing �
 | `professionalTitle` | string | e.g. "Naturopath, BHSc" |
 | `bio` | string | min 200 chars |
 | `photo` | string | `blob` |
-| `topics` | string | `multi` — slugs from `Topic`, `maxCardinality: 8`. Matched directly by the search query; there is no derived copy |
+| `topics` | string | `multi` — slugs from `Category`, `maxCardinality: 8`. Matched directly by the search query; there is no derived copy |
 | `country`, `region`, `city` | string | Public |
 | `timezone` | string | IANA name |
 | `languages` | string | `multi` |
@@ -262,8 +261,8 @@ Append-only proof for disputes. `appointmentId`, `accountId` (both parties, for 
 #### `Review`
 `accountId` (patient), `clinicianId`, `appointmentId`, `rating` (number 1–5), `comment`, `published` (boolean). Created only for `completed` appointments. Feeds the rating aggregation pipeline.
 
-#### `Topic`
-`name`, `slug`, `kind` (enum `specialisation,ailment`), `synonyms` (`multi`), `active`. Specialisations and ailments merged into one collection — to a patient they are the same thing ("what do you need help with?"), and the search treats them identically. Seeded by an admin script; `accessRead: allow`, writes blocked.
+#### `Category`
+`label`, `slug`, `query` (the phase-2 filter fragment it contributes), `kind` (enum `region,specialisation,ailment`), `position`, `level` (1 = where, 2 = what they treat). One collection drives both the `/browse` dropdowns and the topic list on the clinician profile, so a category is searchable and selectable together or not at all. Seeded by `seed-categories.py`; `accessRead: allow`, writes blocked.
 
 #### `Email`
 The queue the worker drains. `toAccountId`, `toEmail`, `template`, `payload` (JSON string), `status` (enum `queued,sent,failed`), `sentAt`, `error`, `dedupeKey`. **Worker-only — `accessRead: block`.** The frontend never writes here.
@@ -279,7 +278,7 @@ The queue the worker drains. `toAccountId`, `toEmail`, `template`, `payload` (JS
 ### 6.1 Clinician profile management
 
 **REQ-PROF-1** The clinician dashboard uses `<model-input>` bound to `Clinician` fields so edits save and sync in realtime without a save button, wrapped in a `<render-group>` so the form appears only once fully loaded.
-**REQ-PROF-2** The topic picker is an `<input-provider>` bound to a `<collection-viewer>` over `Topic`, combined via `<input-combiner>` into the `topics` multi field. Specialisations and ailments share one picker, filtered by `kind`. The picker must enforce the 8-topic cap (REQ-SEARCH-3).
+**REQ-PROF-2** The topic picker is an `<input-provider>` bound to a `<collection-viewer>` over `Category`, combined via `<input-combiner>` into the `topics` multi field. Specialisations and ailments share one picker, filtered by `kind`. The picker must enforce the 8-topic cap (REQ-SEARCH-3).
 **REQ-PROF-3** Profile edits take effect in search immediately — the query matches the practitioner's own fields, so there is nothing derived to rebuild and no consistency window. The worker's only remaining denormalisation here is copying `priceAmount` / `consultationMinutes` onto future `TimeSlot` records so a slot renders without a join.
 **REQ-PROF-4** A profile-completeness checklist shows, via `<if-group>`, exactly which of the REQ-CLIN-4 conditions are still unmet.
 

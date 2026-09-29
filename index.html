@@ -255,7 +255,7 @@
      DEV NOTE
      There is no Keycloak / OAuth wired up yet, so the browser socket is
      unauthenticated. Saasufy therefore allows reads of models whose
-     accessRead is "allow" (Clinician, Topic, Document, Review) and
+     accessRead is "allow" (Clinician, Category, Document, Review) and
      refuses everything else.
 
      DEV_ACCOUNT_ID below is the account associated with the HTTP API
@@ -460,17 +460,28 @@
                 consumers=".search-combiner"
                 provider-template="{{(function(t){return t ? 'displayName contains (?i)' + t + ' ~OR1~ professionalTitle contains (?i)' + t + ' ~OR1~ city contains (?i)' + t : ''})(value.split(',').join(' ').trim())}}"
               ></input-provider></label>
+            <label class="f" style="margin:0;flex:0 1 200px"><span class="lab">Sort by</span>
+              <!-- The direction rides on the value: transformOrderByField accepts a
+                   trailing " desc" on the param it is bound to. -->
+              <input-provider
+                name="sort"
+                type="select"
+                options="Name=displayName,From Lowest Fee=priceAmount,From Highest Fee=priceAmount desc"
+                value="displayName"
+                skip-init-change
+                consumers=".search-combiner"
+              ></input-provider></label>
           </div>
 
           <!-- a bare band matches any weekday, hence [0-6] -->
           <input-combiner
             class="search-combiner"
             consumers=".search-results:collection-view-params"
-            provider-template="listingStatus=listed,query={{[value.region, value.specialty, value.text, (function (day, band) { if (!day && !band) return ''; var field = band === 'morning' ? 'morningDays' : band === 'afternoon' ? 'afternoonDays' : band === 'evening' ? 'eveningDays' : 'availableDays'; return field + ' contains ' + (day || '[0-6]'); })(value.day, value.band)].filter(Boolean).join(' ~AND~ ')}},sortBy=displayName"
+            provider-template="listingStatus=listed,query={{[value.region, value.specialty, value.text, (function (day, band) { if (!day && !band) return ''; var field = band === 'morning' ? 'morningDays' : band === 'afternoon' ? 'afternoonDays' : band === 'evening' ? 'eveningDays' : 'availableDays'; return field + ' contains ' + (day || '[0-6]'); })(value.day, value.band)].filter(Boolean).join(' ~AND~ ')}},sortBy={{value.sort || 'displayName'}}"
           ></input-combiner>
 
             <collection-reducer
-              collection-type="SearchCategory"
+              collection-type="Category"
               collection-fields="label,query,position"
               collection-view="levelView"
               collection-view-params="level=1"
@@ -481,7 +492,7 @@
                 <input-provider
                   type="text"
                   style="display:none"
-                  value="{{SearchCategory.map(c => c.label + '=' + c.query).join(',')}}"
+                  value="{{Category.map(c => c.label + '=' + c.query).join(',')}}"
                   consumers=".cat-level1:options"
                   provider-template="Everywhere=,{{value}}"
                 ></input-provider>
@@ -490,7 +501,7 @@
             </collection-reducer>
 
             <collection-reducer
-              collection-type="SearchCategory"
+              collection-type="Category"
               collection-fields="label,query,position"
               collection-view="levelView"
               collection-view-params="level=2"
@@ -501,7 +512,7 @@
                 <input-provider
                   type="text"
                   style="display:none"
-                  value="{{SearchCategory.map(c => c.label + '=' + c.query).join(',')}}"
+                  value="{{Category.map(c => c.label + '=' + c.query).join(',')}}"
                   consumers=".cat-level2:options"
                   provider-template="All specialties=,{{value}}"
                 ></input-provider>
@@ -981,16 +992,18 @@
                 <span class="hint">Comma-separated slugs from the list below. Saasufy stores
                   multi-value fields as comma-separated strings.</span></label>
 
+              <!-- Only categories patients can filter on are selectable here. -->
               <h3 style="margin-top:18px">Available topics</h3>
               <div class="grid2">
                 <div>
                   <div class="small muted" style="margin-bottom:6px">Specialisations</div>
                   <collection-viewer
-                    collection-type="Topic" collection-fields="name,slug,kind"
+                    collection-type="Category" type-alias="Cat"
+                    collection-fields="label,slug,kind,position"
                     collection-view="kindView" collection-view-params="kind=specialisation"
                     collection-view-primary-fields="kind" collection-page-size="30"
                   >
-                    <template slot="item"><div class="small"><code>{{Topic.slug}}</code> — {{Topic.name}}</div></template>
+                    <template slot="item"><div class="small"><code>{{Cat.slug}}</code> — {{Cat.label}}</div></template>
                     <template slot="no-item"><div class="empty small">None seeded.</div></template>
                     <div slot="viewport"></div>
                   </collection-viewer>
@@ -998,11 +1011,12 @@
                 <div>
                   <div class="small muted" style="margin-bottom:6px">Ailments</div>
                   <collection-viewer
-                    collection-type="Topic" collection-fields="name,slug,kind"
+                    collection-type="Category" type-alias="Cat"
+                    collection-fields="label,slug,kind,position"
                     collection-view="kindView" collection-view-params="kind=ailment"
                     collection-view-primary-fields="kind" collection-page-size="30"
                   >
-                    <template slot="item"><div class="small"><code>{{Topic.slug}}</code> — {{Topic.name}}</div></template>
+                    <template slot="item"><div class="small"><code>{{Cat.slug}}</code> — {{Cat.label}}</div></template>
                     <template slot="no-item"><div class="empty small">None seeded.</div></template>
                     <div slot="viewport"></div>
                   </collection-viewer>

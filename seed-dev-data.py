@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed the Topic vocabulary and one demo clinician for local frontend development.
+"""Seed one demo clinician for local frontend development.
 Writes go through the Admin/Service HTTP API, which associates them with the account
 in .saasufy-dev-account (set as serviceAccountId on the API credential)."""
 import json, urllib.request, os
@@ -30,34 +30,10 @@ def wipe(model):
             call('DELETE', f"{model}/{x['id'] if isinstance(x,dict) else x}"); n += 1
     return n
 
-TOPICS = [
-    ('Naturopathy','naturopathy','specialisation','naturopath,natural medicine'),
-    ('Nutrition','nutrition','specialisation','dietitian,diet,nutritionist'),
-    ('Acupuncture','acupuncture','specialisation','dry needling,tcm'),
-    ('Herbal Medicine','herbal-medicine','specialisation','herbalism,botanical'),
-    ('Homeopathy','homeopathy','specialisation',''),
-    ('Remedial Massage','remedial-massage','specialisation','massage,myotherapy'),
-    ('Chinese Medicine','chinese-medicine','specialisation','tcm'),
-    ('Kinesiology','kinesiology','specialisation',''),
-    ('Anxiety','anxiety','ailment','stress,panic,worry'),
-    ('Digestive Health','digestive-health','ailment','gut,ibs,bloating,digestion'),
-    ('Fatigue','fatigue','ailment','tired,exhaustion,low energy'),
-    ('Sleep Problems','sleep-problems','ailment','insomnia,sleep'),
-    ('Hormonal Health','hormonal-health','ailment','menopause,pms,thyroid'),
-    ('Chronic Pain','chronic-pain','ailment','pain,back pain,arthritis'),
-    ('Skin Conditions','skin-conditions','ailment','eczema,acne,psoriasis'),
-    ('Immune Support','immune-support','ailment','immunity,colds'),
-]
 
 print('wiping existing dev data...')
-for m in ('Document','Availability','TimeSlot','Clinician','Topic'):
+for m in ('Document','Availability','TimeSlot','Clinician'):
     print(f'  {m}: removed {wipe(m)}')
-
-print('\nseeding Topic vocabulary...')
-for name, slug, kind, syn in TOPICS:
-    r = call('POST', 'Topic', dict(name=name, slug=slug, kind=kind, synonyms=syn, active=True))
-    if str(r).startswith('ERR'): print('  ', name, r)
-print(f'  {len(TOPICS)} topics')
 
 print('\nseeding demo clinician...')
 clin = call('POST', 'Clinician', dict(
