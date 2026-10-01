@@ -10,7 +10,7 @@ The platform intermediates the relationship rather than just introducing the two
 
 The frontend is a static site built almost entirely from [Saasufy](https://saasufy.com) components — `app-router`, `collection-viewer`, `model-input` and friends — talking directly to a Saasufy service over WebSocket, with realtime sync and access control enforced at the data layer. There is no build step and no framework. Accounts are handled by the shared Saasufy Keycloak instance via Saasufy's OAuth components.
 
-Saasufy has no server-side code, so everything with an external side effect — sending email, charging cards through Pin Payments, creating Zoom meetings, expiring holds, materialising availability slots, releasing payouts — lives in a companion self-hosted Node.js server. It is written as a reconciler rather than an API: the frontend writes intent into Saasufy, and the worker observes the change and acts on it. The browser never calls the worker for booking logic.
+Saasufy has no server-side code, so everything with an external side effect — sending email, charging cards through Pin Payments, creating Zoom meetings, expiring holds, releasing payouts — lives in a companion self-hosted Node.js server. It is written as a reconciler rather than an API: the frontend writes intent into Saasufy, and the worker observes the change and acts on it. The browser calls the worker directly in exactly one place — asking for an appointment, where the patient is still anonymous and so has nothing it is allowed to write.
 
 ## Authentication
 
@@ -85,9 +85,10 @@ minutes from local Sunday midnight, and UTC is *derived* for search only.
 One axis rather than `(dayOfWeek, minuteOfDay)` means a block may run past local midnight into the
 next day without being split in two.
 
-`Availability` is `accessRead: restrict`, so a patient browsing the site cannot read it, and a
-Saasufy view cannot join across models anyway — hence the rollup onto `Clinician`, where
-`searchView`'s second-phase query can reach it. Both `Clinician` fields are written **only** by
+`Availability` is `accessRead: allow` — the booking calendar renders it directly in an
+anonymous patient's browser (see below) — but a Saasufy view cannot join across models, so
+search still needs the rollup onto `Clinician`, where `searchView`'s second-phase query can
+reach it. Both `Clinician` fields are written **only** by
 the `availabilityHours` aggregation and are blocked for user writes.
 
 ### Why hour keys rather than bands
@@ -141,8 +142,9 @@ browser's own zone rather than UTC, so the worst case is a practitioner who has 
 filed ten hours out. `repair-availability-keys.py` recomputes the keys on every weekly row from
 each clinician's profile timezone; run it after a timezone change, and with `--apply` to write.
 
-Slot materialisation does **not** get this margin and must not — an hour of drift there is a
-patient at 9am and a practitioner at 10am. The worker resolves the offset at each concrete date.
+Deriving the bookable times themselves does **not** get this margin and must not — an hour of
+drift there is a patient at 9am and a practitioner at 10am. The booking calendar resolves the
+offset at each concrete instant (see below), and so must the worker when it checks a request.
 
 Each pipeline sets `useGroupAsId` (the group value, `clinicianId`, becomes the target record id,
 which is what lands the result on the matching `Clinician`), `updateOnly` (a dangling
@@ -166,6 +168,57 @@ curl -H "Authorization:Bearer $(cat .saasufy-api-key)" -H "Content-Type: applica
   -d "{\"rebuildRequestedAt\": $(date +%s%3N)}"
 ```
 
+## Booking a time
+
+The public profile's **Choose a time** leads to `#/book/:clinicianId`, which renders a week of
+the clinician's open times at a time.
+
+**The times are computed, not stored.** The page reads the clinician's `Availability` blocks
+and expands them into concrete instants in the browser, which is where the IANA database is —
+the same reasoning that puts `utcHourKeys` there. A `TimeSlot` row is written only when a time
+is actually taken, so the collection holds bookings rather than a pre-materialised grid of
+every bookable minute for every practitioner. The alternative — a row per visible slot — cost
+roughly 300 rows per clinician per 60 days, all of it rewritten whenever anyone edited their
+hours, and nearly all of it never looked at.
+
+This is why `Availability` is `accessRead: allow`. A patient has no account when they pick a
+time, and nothing in those blocks is private: it is the same "when I work" the calendar then
+draws. The field-level restrictions that matter are on `Clinician`, not here.
+
+The page therefore binds two collections:
+
+| | |
+| --- | --- |
+| `Availability` via `clinicianView` | The weekly pattern, blackouts and one-off openings. A handful of rows, fetched once |
+| `TimeSlot` via `clinicianRangeView`, `status contains held\|booked` | The times already taken, for the displayed week only. Subtracted from the computed set |
+
+Expansion is DST-correct: each block is walked over the clinician's own calendar dates and each
+local time is converted with the offset *at that instant*, re-read once because the first lookup
+can land the wrong side of a transition. Blocks may run past local midnight — the single
+minute-of-week axis holds that without splitting them. The two-hour lead time (REQ-AVAIL-4) and
+the 60-day horizon are applied to the computed set.
+
+**A week, not a month, because a Saasufy view page is capped at 200 records.** That cap no longer
+binds on the slots themselves, but it still binds on the taken-slot query, and a week keeps the
+calendar legible. The week arrows rewrite `collection-view-params` on the inner reducer, which is
+what asks for the next window of taken times; the available times for that week are recomputed
+locally.
+
+Neither reducer slots a `no-item` template: a clinician with no hours, or an empty week, must
+still render the week arrows or there is no way back out, so the item template draws those cases
+itself.
+
+Selecting a time and confirming posts to `POST /appointments/request` on the companion worker
+(REQ-ARCH-12) with the chosen instant rather than a slot id — there is no row yet. The worker
+creates the `TimeSlot` and the `Appointment` together, and emails the clinician an invitation
+they can accept and add to their calendar. That endpoint does not exist yet, so the page reports
+that it could not be reached; the frontend half is complete and the contract is in
+`requirements.md`.
+
+This is the one place the browser calls the worker instead of writing intent into Saasufy, and
+it is forced: the patient is anonymous at this point and `Appointment` is `accessCreate:
+restrict`, so there is no record an unauthenticated socket could write.
+
 ## Repository
 
 | Path | |
@@ -175,11 +228,12 @@ curl -H "Authorization:Bearer $(cat .saasufy-api-key)" -H "Content-Type: applica
 | `create-schema.py` | Creates/updates the Saasufy collections, indexes, views and access rules. Idempotent — safe to re-run, then deploy |
 | `migrate-credentials-to-documents.py` | Copies every `Credential` record into `Document`, preserving ids. Idempotent; `--dry-run` reports without writing. Kept until `Credential` is dropped |
 | `migrate-qualificationname-to-documentname.py` | Copies `Document.qualificationName` into `documentName`. Idempotent; `--dry-run` reports without writing |
+| `migrate-availability-to-minute-of-week.py` | Converts `Availability` rows still on the dropped `(dayOfWeek, startMinute, endMinute)` triple to `startMinuteOfWeek` / `endMinuteOfWeek`, and fills in `utcHourKeys`. Idempotent; `--dry-run` reports without writing |
 | `seed-dev-data.py` | Seeds the topic vocabulary and a demo practitioner for local development |
 | `seed-categories.py` | Seeds the `Category` rows behind the `/browse` dropdowns and the profile topic list. Wipes and reseeds, so it is the source of truth for that table |
 | `seed-practitioners.py` | Seeds ten sample practitioners and their weekly availability, spread across regions, specialisations and times of day |
 | `dev-access.py` | Temporarily relaxes write access for local development; `restore` puts the spec's rules back |
-| `deploy.py` | Rewrites the dev URLs in `index.html` to the deployed URL and uploads it to Saasufy's file hosting. Strips indentation to stay under the API's 100 KiB request-body limit, which base64 hits well before the field's own `max`; `--dry-run` reports without uploading |
+| `deploy.py` | Rewrites the dev URLs in `index.html` to the deployed URL and uploads it to Saasufy's file hosting. Minifies only if needed to stay under the API's 1,000,000-byte request-body limit, which base64 hits well before the field's own `max`; `--dry-run` reports without uploading |
 | `config.json` | Deployment target — the source file, the dev URL to replace and the `files/` URL the app is served from |
 | `.saasufy-api-key` | Saasufy admin credential (gitignored) |
 | `.saasufy-service-url` | Deployed Saasufy service endpoint |

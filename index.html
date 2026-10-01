@@ -256,6 +256,45 @@
   .pager-btn[disabled]:hover{background:var(--surface);color:var(--text)}
   .pager-num{display:inline-block;margin:14px 10px 0;color:var(--muted);
     font-size:.86rem;min-width:1.5em;text-align:center}
+  /* ---- booking calendar (see README) ---- */
+  .cal{border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+  .cal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+  .cal-title{font-weight:650}
+  .cal-nav{width:34px;height:34px;padding:0;font:inherit;line-height:1;cursor:pointer;
+    color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:8px}
+  .cal-nav:hover:not([disabled]){background:#f4f2ee}
+  .cal-nav[disabled]{opacity:.35;cursor:default}
+  .cal-week{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+  .cal-col{min-width:0}
+  .cal-col-head{text-align:center;padding-bottom:7px;margin-bottom:9px;
+    border-bottom:1px solid var(--border)}
+  .cal-col-head .dow{display:block;font-size:.72rem;font-weight:600;color:var(--muted)}
+  .cal-col-head .dom{display:block;font-size:1.05rem;font-weight:650;line-height:1.3}
+  .cal-col-head.today .dom{color:var(--accent)}
+  .cal-col-times{display:flex;flex-direction:column;gap:6px}
+  .cal-none{text-align:center;color:var(--border);font-size:.9rem}
+  .time{width:100%;padding:7px 4px;font:inherit;font-size:.85rem;cursor:pointer;
+    color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:8px}
+  .time:hover{color:var(--accent);border-color:var(--accent)}
+  .time.sel{color:#fff;background:var(--accent);border-color:var(--accent)}
+  .cal-empty{color:var(--muted);text-align:center;font-size:.9rem;padding:20px 0 4px}
+  @media(max-width:760px){
+    .cal-week{grid-template-columns:1fr;gap:0}
+    .cal-col.off{display:none}   /* a column of blank rows is noise on a phone */
+    .cal-col{display:flex;gap:14px;align-items:baseline;padding:11px 0;
+      border-top:1px solid var(--border)}
+    .cal-col:first-child{border-top:0}
+    .cal-col-head{flex:0 0 62px;display:flex;gap:7px;align-items:baseline;
+      text-align:left;border:0;padding:0;margin:0}
+    .cal-col-head .dow,.cal-col-head .dom{display:inline;font-size:.95rem}
+    .cal-col-times{flex:1;flex-direction:row;flex-wrap:wrap}
+    .time{width:auto;padding:7px 12px}
+  }
+  .chosen{font-weight:600;margin:0 0 4px}
+  .chosen-sub{color:var(--muted);font-size:.86rem;margin:0 0 16px}
+  /* Last thing in the card, and .err/.note carry a bottom margin but no top. */
+  .request-msg{margin:14px 0 0}
+  .request-msg:empty{display:none}
 </style>
 </head>
 <body>
@@ -293,11 +332,17 @@
                           'Thursday', 'Friday', 'Saturday'];
     var BANDS = { morning: [6, 12], afternoon: [12, 17], evening: [17, 22] };
 
+    // Cached per zone: deriving a week of slots asks for thousands of offsets, and
+    // constructing the formatter is the expensive part, not reading it.
+    var offsetFormats = {};
     function offsetAt(timeZone, at) {
       try {
-        var parts = new Intl.DateTimeFormat('en-US', {
-          timeZone: timeZone, timeZoneName: 'longOffset'
-        }).formatToParts(at);
+        if (!offsetFormats[timeZone]) {
+          offsetFormats[timeZone] = new Intl.DateTimeFormat('en-US', {
+            timeZone: timeZone, timeZoneName: 'longOffset'
+          });
+        }
+        var parts = offsetFormats[timeZone].formatToParts(at);
         for (var i = 0; i < parts.length; i++) {
           if (parts[i].type !== 'timeZoneName') continue;
           var m = /^GMT([+-])(\d\d):(\d\d)$/.exec(parts[i].value);
@@ -460,6 +505,338 @@
       var form = weeklyFormOf(e.target);
       if (form) syncWeeklyForm(form);
     }, true);
+  })();
+</script>
+<script>
+  // Rewritten to the production origin on deploy, via `rewrites` in config.json.
+  window.WORKER_BASE_URL = 'http://localhost:8200';
+</script>
+
+<!-- Booking calendar — a week of the clinician's open times, read back in the
+     viewer's own zone. Slots are computed from Availability here rather than stored:
+     a TimeSlot row exists only once a time is actually taken. See README. -->
+<script>
+  (function () {
+    var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+                  'August', 'September', 'October', 'November', 'December'];
+    var DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    var FULL_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+                     'Friday', 'Saturday'];
+    var DAY_MS = 86400000;
+    var SPAN = 7;                    // days per view
+    var HORIZON_DAYS = 60;           // REQ-AVAIL-2
+    var LEAD_MS = 2 * 3600 * 1000;   // REQ-AVAIL-4
+
+    // Outside the DOM: the reducer re-renders its viewport on every change, which would
+    // otherwise drop the selection mid-booking. Keyed on the reducer element, since a
+    // fresh one means the page re-rendered and its view params are back at week one.
+    var picked = {};
+    var sequence = 0;
+
+    // Whole days, not `now`: a bound that moved every render would refetch each time.
+    window.dayStartAt = function (offsetDays) {
+      var d = new Date();
+      d.setHours(0, 0, 0, 0);
+      d.setDate(d.getDate() + (offsetDays || 0));
+      return d.getTime();
+    };
+
+    // Only the times already taken are stored, so this is a small set.
+    window.slotWeekParams = function (clinicianId, offsetDays) {
+      return 'clinicianId=' + clinicianId +
+        ',fromAt:number=' + window.dayStartAt(offsetDays) +
+        ',toAt:number=' + window.dayStartAt(offsetDays + SPAN) +
+        ',query=status contains held|booked';
+    };
+
+    function dayKey(date) {
+      return date.getFullYear() + '-' + (date.getMonth() + 1) + '-' + date.getDate();
+    }
+
+    function clockLabel(date) {
+      return window.clockOf(date.getHours() * 60 + date.getMinutes());
+    }
+
+    function dateLabel(date) {
+      return FULL_DAYS[date.getDay()] + ' ' + date.getDate() + ' ' + MONTHS[date.getMonth()];
+    }
+
+    window.zoneClock = function (at, zone) {
+      try {
+        return new Intl.DateTimeFormat('en-AU', {
+          timeZone: zone, weekday: 'short', day: 'numeric', month: 'short',
+          hour: 'numeric', minute: '2-digit'
+        }).format(new Date(at));
+      } catch (e) { return ''; }
+    };
+
+    // The civil date an instant falls on in `zone`.
+    var civilFormats = {};
+    function civilIn(zone, at) {
+      if (!civilFormats[zone]) {
+        civilFormats[zone] = new Intl.DateTimeFormat('en-US', {
+          timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit'
+        });
+      }
+      var out = {};
+      civilFormats[zone].formatToParts(new Date(at)).forEach(function (part) {
+        if (part.type !== 'literal') out[part.type] = Number(part.value);
+      });
+      return { y: out.year, m: out.month - 1, d: out.day };
+    }
+
+    // A civil time in `zone` as a UTC instant. The first offset lookup can land the
+    // wrong side of a DST change, so it is applied and then re-read at the result.
+    function instantAt(zone, y, m, d, minute) {
+      var naive = Date.UTC(y, m, d, 0, minute);
+      var at = naive - window.tzOffsetMinutes(zone, new Date(naive)) * 60000;
+      return naive - window.tzOffsetMinutes(zone, new Date(at)) * 60000;
+    }
+
+    // Expand the weekly pattern, its blackouts and its one-off openings into concrete
+    // instants in [fromAt, toAt). Nothing is written — the browser is where the IANA
+    // database is, and a row is only worth storing once the time is taken.
+    function instantsFrom(blocks, zone, minutes, fromAt, toAt) {
+      if (!minutes || !blocks.length) return [];
+      var weekly = [], blackouts = [], extras = [];
+      blocks.forEach(function (block) {
+        if (block.active === false) return;
+        if (block.kind === 'weekly' && block.startMinuteOfWeek != null) weekly.push(block);
+        else if (block.kind === 'dayOff' && block.date != null) blackouts.push(block);
+        else if (block.kind === 'extra' && block.date != null) extras.push(block);
+      });
+
+      var found = [];
+      var step = function (block, start, span, limit) {
+        for (var at = start; at + minutes <= start + span; at += minutes) {
+          var instant = limit(at);
+          if (instant == null) continue;
+          if (block.effectiveFrom && instant < block.effectiveFrom) continue;
+          if (block.effectiveUntil && instant >= block.effectiveUntil) continue;
+          if (instant >= fromAt && instant < toAt) found.push(instant);
+        }
+      };
+
+      // Walk the clinician's own calendar dates, starting a day early so a block
+      // running past local midnight is not missed.
+      var first = civilIn(zone, fromAt - DAY_MS);
+      var cursor = new Date(Date.UTC(first.y, first.m, first.d));
+      for (var guard = 0; guard < 400; guard++) {
+        var y = cursor.getUTCFullYear(), m = cursor.getUTCMonth(), d = cursor.getUTCDate();
+        if (instantAt(zone, y, m, d, 0) >= toAt) break;
+        var weekday = cursor.getUTCDay();
+        weekly.forEach(function (block) {
+          if (Math.floor(block.startMinuteOfWeek / 1440) % 7 !== weekday) return;
+          step(block, block.startMinuteOfWeek % 1440,
+               block.endMinuteOfWeek - block.startMinuteOfWeek,
+               function (at) { return instantAt(zone, y, m, d, at); });
+        });
+        cursor.setUTCDate(d + 1);
+      }
+      extras.forEach(function (block) {
+        step(block, block.startMinuteOfDay || 0,
+             (block.endMinuteOfDay || 0) - (block.startMinuteOfDay || 0),
+             function (at) { return block.date + at * 60000; });
+      });
+
+      var covered = function (instant) {
+        for (var i = 0; i < blackouts.length; i++) {
+          var from = blackouts[i].date + (blackouts[i].startMinuteOfDay || 0) * 60000;
+          var until = blackouts[i].date +
+            (blackouts[i].endMinuteOfDay == null ? 1440 : blackouts[i].endMinuteOfDay) * 60000;
+          if (instant >= from && instant < until) return true;
+        }
+        return false;
+      };
+      var seen = {};
+      return found.filter(function (instant) {
+        if (seen[instant] || covered(instant)) return false;
+        seen[instant] = true;
+        return true;
+      }).sort(function (a, b) { return a - b; });
+    }
+
+    // The clinician's availability, stashed by the outer reducer for the inner one.
+    window.holdBlocks = function (blocks) {
+      this.availabilityBlocks = blocks || [];
+      return '';
+    };
+
+    function openTimes(home, taken) {
+      var minutes = Number(home.dataset.minutes);
+      var busy = {};
+      (taken || []).forEach(function (slot) { busy[slot.startAt] = true; });
+      var from = Math.max(Date.now() + LEAD_MS, window.dayStartAt(picked.offset));
+      // The last week overlaps the end of the horizon; stop at it, not at the column.
+      var to = Math.min(window.dayStartAt(picked.offset + SPAN),
+                        window.dayStartAt(HORIZON_DAYS));
+      return instantsFrom(home.availabilityBlocks || [], home.dataset.zone, minutes, from, to)
+        .filter(function (instant) { return !busy[instant]; })
+        .map(function (instant) {
+          return { startAt: instant, endAt: instant + minutes * 60000 };
+        });
+    }
+
+    function weekHTML(byDay) {
+      var first = new Date(window.dayStartAt(picked.offset));
+      var last = new Date(window.dayStartAt(picked.offset + SPAN - 1));
+      var today = dayKey(new Date());
+      var columns = [], filled = 0;
+      for (var at = 0; at < SPAN; at++) {
+        var date = new Date(window.dayStartAt(picked.offset + at));
+        var open = byDay[dayKey(date)] || [];
+        if (open.length) filled++;
+        columns.push('<div class="cal-col' + (open.length ? '' : ' off') + '">' +
+          '<div class="cal-col-head' + (dayKey(date) === today ? ' today' : '') + '">' +
+          '<span class="dow">' + DOW[date.getDay()] + '</span>' +
+          '<span class="dom">' + date.getDate() + '</span></div>' +
+          (open.length ?
+            '<div class="cal-col-times">' + open.map(function (slot) {
+              return '<button type="button" class="time' +
+                (slot.startAt === picked.startAt ? ' sel' : '') + '" data-at="' +
+                slot.startAt + '">' + clockLabel(new Date(slot.startAt)) + '</button>';
+            }).join('') + '</div>' :
+            '<div class="cal-none">—</div>') + '</div>');
+      }
+      var arrow = function (step, glyph, label, off) {
+        return '<button type="button" class="cal-nav" data-cal-week="' + step + '"' +
+          (off ? ' disabled' : '') + ' aria-label="' + label + '">' + glyph + '</button>';
+      };
+      var sameMonth = first.getMonth() === last.getMonth();
+      return '<div class="cal"><div class="cal-head">' +
+        arrow(-SPAN, '‹', 'Previous week', picked.offset <= 0) +
+        '<div class="cal-title">' + first.getDate() +
+        (sameMonth ? '' : ' ' + MONTHS[first.getMonth()]) + ' – ' + last.getDate() +
+        ' ' + MONTHS[last.getMonth()] + ' ' + last.getFullYear() + '</div>' +
+        arrow(SPAN, '›', 'Next week', picked.offset + SPAN >= HORIZON_DAYS) +
+        '</div><div class="cal-week">' + columns.join('') + '</div>' +
+        (filled ? '' : '<div class="cal-empty">Nothing open this week — try the one after.</div>') +
+        '</div>';
+    }
+
+    function requestCard(source) {
+      var page = source.closest('.booking-page');
+      return page && page.querySelector('.booking-request');
+    }
+
+    function syncRequest(home, slot) {
+      var card = requestCard(home);
+      if (!card) return;
+      // Holding the slot drops it out of the open set; the confirmation must not go
+      // with it. Choosing another time thaws this.
+      if (card.bookingSent) return;
+      card.bookingSlot = slot;
+      card.hidden = !slot;
+      if (!slot) return;
+      var start = new Date(slot.startAt);
+      card.querySelector('.chosen').textContent = dateLabel(start) + ', ' +
+        clockLabel(start) + ' – ' + clockLabel(new Date(slot.endAt)) +
+        ' (' + window.viewerTimeZone() + ')';
+      var theirs = window.zoneClock(slot.startAt, home.dataset.zone);
+      card.querySelector('.chosen-sub').textContent = theirs ?
+        home.dataset.name + ' sees this as ' + theirs + ', ' + home.dataset.zone + '.' : '';
+      var message = card.querySelector('.request-msg');
+      message.className = 'request-msg';
+      message.textContent = '';
+      card.querySelector('.request-btn').disabled = false;
+    }
+
+    function draw(source) {
+      var home = source.closest('.avail-source');
+      if (!source.bookingSequence) source.bookingSequence = ++sequence;
+      if (picked.sequence !== source.bookingSequence) {
+        picked = { sequence: source.bookingSequence, offset: 0 };
+      }
+      var open = openTimes(home, source.takenSlots);
+      var byDay = {};
+      open.forEach(function (slot) {
+        var key = dayKey(new Date(slot.startAt));
+        (byDay[key] = byDay[key] || []).push(slot);
+      });
+      var chosen = open.filter(function (slot) { return slot.startAt === picked.startAt; })[0];
+      if (!chosen) picked.startAt = null;
+      syncRequest(home, chosen || null);
+      return weekHTML(byDay);
+    }
+
+    // `.call(this, Taken)` in the reducer's template hands us the reducer element; the
+    // availability and the clinician's details sit on the .avail-source around it.
+    window.slotCalendar = function (taken) {
+      this.takenSlots = taken;
+      return draw(this);
+    };
+
+    // Picking a time needs no round trip; changing week asks for one via the view params.
+    function redraw(source) {
+      var viewport = source.querySelector('[slot=viewport]');
+      if (viewport) viewport.innerHTML = draw(source);
+    }
+
+    function sendRequest(button) {
+      var card = button.closest('.booking-request');
+      var slot = card.bookingSlot;
+      var message = card.querySelector('.request-msg');
+      var field = function (name) {
+        var input = card.querySelector('[name=' + name + ']');
+        return input ? input.value.trim() : '';
+      };
+      if (!slot) return;
+      if (!field('patientName') || !field('patientEmail')) {
+        message.className = 'request-msg err';
+        message.textContent = 'Your name and email are both needed — the invitation names you.';
+        return;
+      }
+      message.className = 'request-msg muted small';
+      message.textContent = 'Sending…';
+      button.disabled = true;
+      fetch(window.WORKER_BASE_URL + '/appointments/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clinicianId: card.dataset.clinicianId,
+          startAt: slot.startAt,
+          endAt: slot.endAt,
+          patientName: field('patientName'),
+          patientEmail: field('patientEmail'),
+          patientTimezone: window.viewerTimeZone(),
+          intakeReason: field('intakeReason')
+        })
+      }).then(function (response) {
+        return response.text().then(function (body) {
+          if (!response.ok) throw new Error(body.slice(0, 200) || 'HTTP ' + response.status);
+          card.bookingSent = true;
+          message.className = 'request-msg note';
+          message.textContent = 'Sent. ' + card.dataset.name + ' has been emailed an ' +
+            'invitation for this time and will confirm it shortly.';
+        });
+      }).catch(function (error) {
+        message.className = 'request-msg err';
+        message.textContent = 'Could not reach the booking service: ' + error.message;
+        button.disabled = false;
+      });
+    }
+
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest) return;
+      var hit = e.target.closest('[data-cal-week],[data-at],.request-btn');
+      if (!hit) return;
+      if (hit.classList.contains('request-btn')) return sendRequest(hit);
+      var source = hit.closest('.slot-source');
+      if (!source) return;
+      var card = requestCard(source);
+      if (card) card.bookingSent = false;
+      if (hit.hasAttribute('data-cal-week')) {
+        var next = picked.offset + Number(hit.getAttribute('data-cal-week'));
+        if (next < 0 || next >= HORIZON_DAYS) return;
+        picked.offset = next;
+        picked.startAt = null;
+        source.setAttribute('collection-view-params',
+          window.slotWeekParams(source.dataset.clinicianId, next));
+      } else {
+        picked.startAt = Number(hit.getAttribute('data-at'));
+        redraw(source);
+      }
+    });
   })();
 </script>
 
@@ -831,10 +1208,112 @@
             </div>
             <div class="card">
               <h2>Book a consultation</h2>
-              <p class="muted small">Booking arrives with the patient flow.</p>
-              <button class="btn" disabled>Choose a time</button>
+              <p class="muted small">Pick from the times {{Clinician.displayName}} has open over
+                 the next 60 days, shown in your own timezone.</p>
+              <a class="btn" href="#/book/{{Clinician.id}}">Choose a time</a>
             </div>
           </template>
+          <div slot="viewport"></div>
+        </model-viewer>
+      </div>
+    </template>
+
+    <!-- ============================ BOOK A TIME ============================ -->
+     <template slot="page" route-path="/book/:clinicianId" auto-reset-window-scroll>
+      <div class="wrap booking-page">
+        <model-viewer
+          model-type="Clinician"
+          model-id="{{clinicianId}}"
+          model-fields="displayName,professionalTitle,timezone,priceAmount,consultationMinutes"
+        >
+          <template slot="item">
+            <p class="small"><a href="#/p/{{Clinician.id}}">&larr; Back to the profile</a></p>
+            <h1>Book with {{Clinician.displayName}}</h1>
+            <p class="muted">{{Clinician.professionalTitle}} ·
+               {{Clinician.consultationMinutes}} minutes online ·
+               ${{Clinician.priceAmount / 100}} AUD</p>
+
+            <div class="card">
+              <h2>Choose a time</h2>
+              <div class="sub">Times are shown in your timezone, {{viewerTimeZone()}} —
+                {{Clinician.displayName}} works in {{Clinician.timezone}}. Bookings open for
+                the next 60 days, from two hours' time.</div>
+
+              <!-- The weekly pattern; the times themselves are computed from it in the
+                   browser. No `no-item` on either reducer: a clinician with no hours, or
+                   an empty week, must still render the arrows, so the item template draws
+                   those cases itself. -->
+              <collection-reducer
+                class="avail-source"
+                collection-type="Availability"
+                type-alias="Avail"
+                collection-fields="kind,active,startMinuteOfWeek,endMinuteOfWeek,date,startMinuteOfDay,endMinuteOfDay,effectiveFrom,effectiveUntil"
+                collection-view="clinicianView"
+                collection-view-params="clinicianId={{Clinician.id}}"
+                collection-view-primary-fields="clinicianId"
+                collection-page-size="200"
+                data-clinician-id="{{Clinician.id}}"
+                data-name="{{Clinician.displayName}}"
+                data-zone="{{Clinician.timezone}}"
+                data-minutes="{{Clinician.consultationMinutes}}"
+              >
+                <template slot="item">{{{holdBlocks.call(this, Avail)}}}
+                  <!-- Only the times already taken are stored, so this stays small. -->
+                  <collection-reducer
+                    class="slot-source"
+                    collection-type="TimeSlot"
+                    type-alias="Taken"
+                    collection-fields="startAt,status"
+                    collection-view="clinicianRangeView"
+                    collection-view-params="{{slotWeekParams(Clinician.id, 0)}}"
+                    collection-view-primary-fields="clinicianId"
+                    collection-page-size="200"
+                    data-clinician-id="{{Clinician.id}}"
+                  >
+                    <template slot="item">{{{slotCalendar.call(this, Taken)}}}</template>
+                    <template slot="loader"><div class="spin">Loading available times…</div></template>
+                    <template slot="error"><div class="err">{{$Taken.error.message}}</div></template>
+                    <div slot="viewport"></div>
+                  </collection-reducer>
+                </template>
+                <template slot="loader"><div class="spin">Loading available times…</div></template>
+                <template slot="error"><div class="err">{{$Avail.error.message}}</div></template>
+                <div slot="viewport"></div>
+              </collection-reducer>
+            </div>
+
+            <!-- Outside the reducer: a slot update redraws the calendar, and what is
+                 typed here has to survive that. -->
+            <div class="card booking-request" hidden
+              data-clinician-id="{{Clinician.id}}"
+              data-name="{{Clinician.displayName}}"
+            >
+              <h2>Confirm this appointment</h2>
+              <p class="chosen"></p>
+              <p class="chosen-sub"></p>
+              <div class="grid2">
+                <label class="f"><span class="lab">Your name</span>
+                  <input type="text" name="patientName" placeholder="Alex Moore"></label>
+                <label class="f"><span class="lab">Your email</span>
+                  <input type="email" name="patientEmail" placeholder="alex@example.com"></label>
+              </div>
+              <label class="f"><span class="lab">What would you like help with?</span>
+                <textarea name="intakeReason"
+                  placeholder="A sentence or two — it goes in the invitation."></textarea>
+                <span class="hint">Seen only by {{Clinician.displayName}}.</span></label>
+              <div class="note"><strong>The worker is not built yet.</strong> This posts to
+                <code>POST /appointments/request</code> on the companion worker, which is what
+                emails {{Clinician.displayName}} an invitation to accept and add to their
+                calendar. Until that endpoint is running it will report that it could not be
+                reached.</div>
+              <div class="btn-row">
+                <button type="button" class="btn request-btn">Request this time</button>
+              </div>
+              <div class="request-msg"></div>
+            </div>
+          </template>
+          <template slot="no-item"><div class="card"><p class="muted">No such practitioner.</p></div></template>
+          <template slot="error"><div class="err">{{$Clinician.error.message}}</div></template>
           <div slot="viewport"></div>
         </model-viewer>
       </div>

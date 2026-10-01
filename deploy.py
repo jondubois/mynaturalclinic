@@ -12,9 +12,11 @@ OAuth provider.
 `deployURL` in config.json is both the replacement text and the upload target:
 its path names what to write, as `/:serviceId/files/:model/:recordId/:field`.
 
-Saasufy's HTTP API rejects request bodies over 100 KiB with "Payload Too Large",
-and base64 inflates the file by a third, so the source is whitespace-minified
-until it fits. This is a transport limit on the API, not the field's `max`.
+Saasufy's HTTP API rejects request bodies over 1,000,000 bytes with "Payload Too
+Large", and base64 inflates the file by a third, so the source is whitespace-minified
+until it fits. This is a transport limit on the API, not the field's `max`, which is
+ten times larger. Measured by bisection against a request the schema rejects anyway:
+999,983 bytes is parsed, 1,000,807 is refused.
 
 Each Saasufy OAuth environment is its own provider with its own Keycloak client
 and registered redirect URIs, so `rewrites` in config.json must swap the
@@ -32,7 +34,7 @@ DEPLOY = CFG['deployURL'].rstrip('/')
 DEV = CFG['devURL'].rstrip('/')
 SOURCE = os.path.join(ROOT, CFG['source'])
 DRY = '--dry-run' in sys.argv[1:]
-BODY_LIMIT = 102400  # measured; the API's cap on the whole request body
+BODY_LIMIT = 1000000  # measured; the API's cap on the whole request body
 
 scheme, _, rest = DEPLOY.partition('://')
 parts = rest.split('/')

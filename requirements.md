@@ -42,7 +42,7 @@ Therefore the following MVP behaviours **cannot** be implemented in Saasufy alon
 | Sending email (invites, verification, reminders, receipts) | No SMTP / outbound calls |
 | Pin Payments charges, refunds, transfers | Requires secret API key and a webhook endpoint |
 | Creating Zoom meetings | Requires server-to-server OAuth and secret credentials |
-| Time-based transitions (invite expiry, slot materialisation, reminders, settlement) | No scheduler |
+| Time-based transitions (invite expiry, hold expiry, reminders, settlement) | No scheduler |
 | Authoritative attendance from Zoom participant reports | Requires polling Zoom API |
 | Serving `https://mynaturalclinic.com/m/:token` meeting links | Needs an HTTP route under our domain |
 
@@ -69,11 +69,13 @@ Therefore the following MVP behaviours **cannot** be implemented in Saasufy alon
                  │  • Pin Payments · Zoom · Postmark         │
                  │  • cron: slots, expiry, reminders, payout │
                  │  • HTTP: /m/:token, /pin/webhook,         │
-                 │    /invite/:token                         │
+                 │    /invite/:token, /appointments/request  │
                  └───────────────────────────────────────────┘
 ```
 
 **Design rule:** the worker is a *reconciler*, not an API. The frontend never calls the worker directly for booking logic; it writes intent into Saasufy (e.g. an `Appointment` with `status = 'pending_payment'`), and the worker observes that state change and performs the side effect, writing the result back. This keeps the app declarative and keeps a single source of truth.
+
+*One deliberate exception:* the appointment request itself (REQ-ARCH-12). A patient choosing a slot is anonymous, and `Appointment` is `accessCreate: restrict` — an unauthenticated browser cannot write that intent into Saasufy at all. The request therefore goes to the worker as an HTTP call, and the worker is what writes the `Appointment`. Everything downstream of that record is reconciled as above.
 
 **REQ-ARCH-1** The worker authenticates to the Saasufy service with a dedicated service API credential (`allowRead` + `allowWrite`), never with the admin credential.
 **REQ-ARCH-2** Every worker side effect must be idempotent and keyed on a field in the record (e.g. `zoomMeetingId` non-empty ⇒ do not create another meeting), because subscriptions can redeliver.
@@ -83,20 +85,41 @@ Therefore the following MVP behaviours **cannot** be implemented in Saasufy alon
 
 The worker is a **custom Node.js server, self-hosted**. This is settled, not an open question.
 
-**REQ-ARCH-4 · Public surface.** The worker terminates TLS on `mynaturalclinic.com` (directly or behind a reverse proxy) and serves exactly four public routes:
+**REQ-ARCH-4 · Public surface.** The worker terminates TLS on `mynaturalclinic.com` (directly or behind a reverse proxy) and serves exactly five public routes:
 
 | Route | Method | Purpose | Auth |
 | --- | --- | --- | --- |
 | `/m/:meetingToken` | GET | Record attendance, redirect to Zoom (§6.7) | Token only |
 | `/invite/:inviteToken` | GET/POST | Clinician accept/decline (§6.6) | Token only |
 | `/pin/webhook` | POST | Charge, refund and transfer events | `Pin-Signature` HMAC |
+| `/appointments/request` | POST | Patient asks for a slot; worker emails the clinician the invite (REQ-ARCH-12) | CORS-restricted, rate-limited |
 | `/healthz` | GET | Liveness, unauthenticated, no data | None |
 
 Everything else — profile editing, search, dashboards — goes browser → Saasufy directly and must never be proxied through the worker.
 
+**REQ-ARCH-12 · Appointment request endpoint.** `POST /appointments/request` is the one route the frontend calls directly, and it is written by the booking page (`#/book/:clinicianId`). The body is JSON:
+
+```jsonc
+{
+  "clinicianId":     "uuid",
+  "startAt":         1791256500000,   // the chosen instant; no TimeSlot exists yet
+  "endAt":           1791259200000,
+  "patientName":     "Alex Moore",
+  "patientEmail":    "alex@example.com",
+  "patientTimezone": "Australia/Sydney",  // IANA, from the browser
+  "intakeReason":    "free text, may be empty"
+}
+```
+
+There is no `timeSlotId`: bookable times are derived (REQ-AVAIL-2) and the row is created by this call. The worker must therefore treat `startAt` as a **claim, not a fact** — it re-derives the clinician's availability server-side and rejects an instant which does not fall on a real slot boundary, lies inside a blackout, or is inside the two-hour lead time. `endAt` is recomputed from `consultationMinutes`, never trusted.
+
+It then creates the `TimeSlot` as `held` keyed on `(clinicianId, startAt)` plus the `Appointment`, and queues the clinician invite email (§6.6) with a `.ics` the clinician can add to their calendar. If that key already exists it responds 409 and changes nothing; the page tells the patient the time was just taken.
+
+The response is JSON; a non-2xx body is shown to the patient verbatim, so it must be a sentence, not a stack trace. The endpoint is rate-limited per IP and per email — it sends mail on behalf of an anonymous caller, which is exactly the shape of an open relay if it is not.
+
 **REQ-ARCH-5 · Pin Payments webhook endpoint** must be publicly reachable over HTTPS with a valid certificate. Every request carries a `Pin-Signature` header containing a timestamp `t` and signature `v1`; the worker must verify it by computing `HMAC-SHA256(signing_key, t + "." + raw_body)` against the endpoint's signing key **before parsing the body or changing any state**. Unverified requests are dropped, not retried. Note that Pin retains webhook records for only **30 days**, so reconciliation that depends on replaying them must happen well inside that window.
 
-**REQ-ARCH-6 · Process model.** Single process for the MVP. Scheduled work (slot materialisation, invite expiry, reminders, completion evaluation, payout release) runs on an in-process timer, not system cron, so the schedule ships with the code.
+**REQ-ARCH-6 · Process model.** Single process for the MVP. Scheduled work (hold expiry, invite expiry, reminders, completion evaluation, payout release) runs on an in-process timer, not system cron, so the schedule ships with the code.
 
 **REQ-ARCH-7 · Single-writer constraint.** Slot transitions are safe because exactly one worker instance performs them (REQ-BOOK-2). **Running a second instance without adding a distributed lock reintroduces the double-booking race.** If the worker is ever scaled horizontally, slot transitions and the scheduler must move behind a lock or a leader election first. This constraint must be stated in the worker's README.
 
@@ -228,12 +251,16 @@ The clinician's calendar input, merged into one collection because to a clinicia
 
 *Trade-off:* one `kind` field means a few columns are unused per row, in exchange for one collection instead of two and a UI that maps to it directly. Worth it.
 
+Access: `accessRead: allow`. The booking calendar expands these blocks in the patient's browser (§6.3) and a patient has no account at that point. Nothing in the collection is private — it is the same "when I work" the calendar then renders. Create, update and delete stay `restrict` to the owning practitioner.
+
 #### `TimeSlot`
-A single bookable time, generated by the worker from `Availability` (§6.3).
+A time which has been **taken** — held, booked or since released. It is not the set of bookable times; that is derived from `Availability` in the browser (§6.3). A row exists only once someone has asked for that time.
 
 `clinicianId`, `accountId` (clinician, for access control), `startAt`, `endAt` (number), `status` (enum `open,held,booked,expired,cancelled`), `holdExpiresAt`, `appointmentId`, and `priceAmount` + `consultationMinutes` denormalised so a slot renders without a join.
 
-Access: `accessRead: allow` (visitors must see availability), create/delete worker-only, `accessUpdate: restrict` — see REQ-BOOK-2 for why holds are worker-mediated.
+`open` survives in the enum for a slot released back after a cancellation or decline (§6.9, REQ-INV-4). Such a row is inert — the calendar already offers that time, because the availability it came from never stopped covering it.
+
+Access: `accessRead: allow` (the calendar must know which times are gone), create/delete worker-only, `accessUpdate: restrict` — see REQ-BOOK-2 for why holds are worker-mediated.
 
 #### `Appointment`
 | Field | Type | Notes |
@@ -292,16 +319,19 @@ The queue the worker drains. `toAccountId`, `toEmail`, `template`, `payload` (JS
 ### 6.3 Availability
 
 **REQ-AVAIL-1** The clinician sets weekly recurring availability (`Availability`) in their local timezone, plus date-specific blackouts and one-off openings (`Availability`).
-**REQ-AVAIL-2** The worker materialises `TimeSlot` records on a **rolling 60-day horizon**, running at least hourly:
-  - expands active rules into concrete slots of `consultationMinutes` length, converting local time to UTC using the clinician's IANA timezone (DST-correct);
-  - removes `blocked` exception ranges; adds `extra` ranges;
-  - never deletes or modifies a slot whose status is `held` or `booked`;
-  - marks past `open` slots as `expired`.
-**REQ-AVAIL-3** Materialisation is idempotent and keyed on `(clinicianId, startAt)`.
+**REQ-AVAIL-2** Bookable times are **derived, not stored**. The `/book` page reads the clinician's `Availability` and expands it into concrete instants in the browser over a **60-day horizon**:
+  - active `weekly` rules become slots of `consultationMinutes` length, each local time converted to UTC with the clinician's IANA zone at *that instant* (DST-correct);
+  - `dayOff` ranges are removed; `extra` ranges are added;
+  - `effectiveFrom` / `effectiveUntil` bound each rule.
+  A change to `Availability` is therefore visible on the booking calendar immediately, with nothing to rebuild and no materialisation lag.
+**REQ-AVAIL-3** A `TimeSlot` row is created only when a time is taken (REQ-BOOK-2). Its identity is `(clinicianId, startAt)` and creation must be atomic on that pair, which is what makes two patients racing for the same instant safe: the second create fails rather than producing a duplicate booking.
 **REQ-AVAIL-4** A minimum booking lead time of **2 hours** applies; slots starting sooner are not offered.
-**REQ-AVAIL-5** The clinician's calendar view renders slots via `<collection-viewer>` and updates in realtime as bookings arrive.
+**REQ-AVAIL-5** The `/book` page subtracts every `TimeSlot` in view whose status is `held` or `booked`, bound in realtime, so a time taken while the page is open disappears from under the patient.
+**REQ-AVAIL-6** The clinician's own calendar view renders their taken times via `<collection-viewer>` and updates in realtime as bookings arrive.
 
-> **Rationale for materialised slots:** Saasufy views filter with one indexed operation (`equals` or `between`) plus a second-phase query. Searching "clinicians free next Tuesday afternoon" against recurrence *rules* would require computation Saasufy cannot do. Concrete slot records make availability a `between` range query on an indexed `startAt`, which is exactly what the view engine is built for.
+> **Why derived rather than materialised:** an earlier design had the worker write a `TimeSlot` for every bookable minute on a rolling horizon. That is ~300 rows per clinician per 60 days, rewritten whenever anyone edits their hours, and almost none of it ever read — and it put the calendar behind an hourly job, so a practitioner who added a Tuesday morning could not see it until the job next ran. Expansion is cheap and the browser already holds the IANA database (§6.4.1 relies on the same fact). What the datastore is genuinely needed for is the *contended* set — which times are gone — and that is small.
+
+> **What this does not change:** search. A Saasufy view filters with one indexed operation plus a second-phase query and cannot expand recurrence rules, so "who is free on Tuesday afternoon" still goes through the `utcHours` rollup on `Clinician` (§6.4). Derivation in the browser works for one clinician's page, not for a query across all of them.
 
 ### 6.4 Search and discovery
 
@@ -375,7 +405,7 @@ in the practitioner's local time (REQ-AVAIL-1). A weekly rule has no stable UTC 
 Both sides emit keys for **both** offsets their zone uses across the year, so a DST
 zone reads one hour wide rather than drifting. Search therefore over-matches slightly
 and **must never under-match**. This margin applies to search only: slot
-materialisation (REQ-AVAIL-2) resolves the offset at each concrete date, where an
+deriving the bookable times (REQ-AVAIL-2) resolves the offset at each concrete instant, where an
 hour of drift is a missed appointment rather than a wider filter.
 
 The browser is the only component with an IANA database, so it computes the keys;
@@ -454,7 +484,7 @@ The booking state machine:
 
 **REQ-BOOK-0 · Card capture.** Card details are collected with **Pin.js hosted fields** on the `/checkout` page and exchanged in the browser for a single-use card token. **Raw card numbers never touch our frontend, our worker or Saasufy**, which keeps the platform in PCI DSS SAQ-A scope. Only the card token is sent to the worker, and only the resulting `pinChargeToken` is persisted.
 **REQ-BOOK-1** The patient selects a slot and enters intake details while anonymous; pressing **Confirm booking** triggers the Keycloak flow if not authenticated (REQ-PAT-3).
-**REQ-BOOK-2** On confirmation the frontend creates an `Appointment` with `status = 'pending_payment'` referencing the slot. The worker observes it, atomically transitions the slot `open → held` with a 15-minute `holdExpiresAt`, and creates a Pin Payments charge against the patient's card token. **If the slot is not `open`, the worker sets the appointment to `expired` and the UI shows "just taken".** The slot transition is worker-mediated precisely so two concurrent patients cannot both win.
+**REQ-BOOK-2** On confirmation the frontend posts the chosen instant to `POST /appointments/request` (REQ-ARCH-12). The worker **creates** the `TimeSlot` as `held` with a 15-minute `holdExpiresAt`, keyed on `(clinicianId, startAt)`, together with the `Appointment`. **The create is what resolves the race:** two concurrent patients both send the same instant, the key collides, and the loser is told the time was just taken. The worker must also verify the instant genuinely falls inside the clinician's `Availability` and outside the lead time, since it arrives from the browser. A time whose row already exists as `held` or `booked` is rejected the same way.
 **REQ-BOOK-3** Payment is **captured immediately** at booking, per the requirement that the patient pays up front. A decline or expiry before acceptance produces an automatic **full refund**.
   - *Noted alternative:* Pin supports authorisation-only charges via `capture: false`, captured later through `PUT /charges/:token/capture`. This would avoid refund churn, but **Pin authorisations expire after exactly seven days**, which fails for any booking made further ahead than that — and partial capture is not supported. Immediate capture remains the correct MVP choice.
 **REQ-BOOK-4** The patient's card is charged `amount = priceAmount`. The platform retains `platformFee` (MVP: **15%**, configurable per-clinician later); `clinicianPayout = amount - platformFee`. Pin Payments' processing fees and any third-party transfer fee are borne by the platform out of its share, not deducted from the clinician.
@@ -523,7 +553,7 @@ Payouts use the Pin Payments **Recipients** and **Transfers** APIs. Patient card
 
 ### 7.1 Structure
 
-A static site. `index.html` holds a single `<socket-provider url="wss://saasufy.com/sid8016/socketcluster/">` wrapping one `<app-router>`; each page is a `<template slot="page">`. No build step, no framework — Saasufy components plus a small amount of vanilla JS confined to: query-string building (REQ-SEARCH-18), timezone rendering, and `sessionStorage` handling of the held booking selection.
+A static site. `index.html` holds a single `<socket-provider url="wss://saasufy.com/sid8016/socketcluster/">` wrapping one `<app-router>`; each page is a `<template slot="page">`. No build step, no framework — Saasufy components plus a small amount of vanilla JS confined to: query-string building (REQ-SEARCH-18), timezone rendering (which includes deriving and drawing the booking calendar, since expanding a weekly rule into instants *is* the timezone conversion — REQ-AVAIL-2), and `sessionStorage` handling of the held booking selection.
 
 ### 7.2 Routes
 
@@ -532,7 +562,7 @@ A static site. `index.html` holds a single `<socket-provider url="wss://saasufy.
 | `` | Home / hero search | Public |
 | `/search` | Results with filters | Public |
 | `/clinician/:profileId` | Public profile, documents, availability calendar | Public |
-| `/book/:slotId` | Intake details + booking summary | Public until confirm |
+| `/book/:clinicianId` | Week calendar derived from `Availability`, intake details, appointment request | Public |
 | `/auth/callback` | `<oauth-handler>` | Public |
 | `/checkout/:appointmentId` | Card payment via Pin.js hosted fields | `no-auth-redirect` |
 | `/booking/:appointmentId` | Status, meeting link, cancel | `no-auth-redirect` |
@@ -559,7 +589,7 @@ The meeting link `/m/:token` and invite link `/invite/:token` are **served by th
 **REQ-NFR-1 · Security.** No secret may appear in client-served files. Pin Payments/Zoom/email credentials live only in the worker. The Saasufy admin API key stays in `.saasufy-api-key`, gitignored, never shipped.
 **REQ-NFR-2 · Data protection.** Intake reason and notes are health information. They are readable only by the two appointment owners, are excluded from all public views, and are never placed in email bodies beyond the patient's stated reason in the clinician invite.
 **REQ-NFR-3 · Documents** are public. They live on `blob` fields of a world-readable record whose id is exposed, so the `/files` URL is derivable by anyone; the field is `accessRead: allow` rather than pretending otherwise. Nothing that must stay private may be stored on a `Document`, and the practitioner is told at upload that the document becomes public once approved.
-**REQ-NFR-4 · Timezones.** Every stored instant is UTC epoch ms. Every displayed time is localised. DST correctness in slot materialisation is a release blocker.
+**REQ-NFR-4 · Timezones.** Every stored instant is UTC epoch ms. Every displayed time is localised. DST correctness when deriving bookable times — in the browser (REQ-AVAIL-2) and in the worker's check of a request (REQ-ARCH-12) — is a release blocker, and the two must agree.
 **REQ-NFR-5 · Money.** Integer cents only, single currency (AUD) for the MVP.
 **REQ-NFR-6 · Idempotency.** Every worker action is idempotent (REQ-ARCH-2). **Pin Payments does not offer idempotency keys**, so duplicate-charge protection must be enforced on our side: the worker only creates a charge when `pinChargeToken` is empty, and writes the token back before acknowledging the work. The same guard applies to refunds and transfers.
 **REQ-NFR-7 · Auditability.** `Attendance` and `Email` are append-only.
@@ -584,7 +614,7 @@ In-person appointments · multi-currency · recurring appointment packages · in
 5. **15% platform fee.**
 6. **Immediate capture with refund-on-decline** rather than authorisation-and-capture (REQ-BOOK-3).
 7. **Manual document review** by an admin.
-8. `mynaturalclinic.com` is the production domain hosting the frontend and the worker's `/m`, `/invite` and `/pin/webhook` routes.
+8. `mynaturalclinic.com` is the production domain hosting the frontend and the worker's `/m`, `/invite`, `/pin/webhook` and `/appointments/request` routes.
 9. Consultations are **online video only**.
 
 ---
@@ -612,7 +642,7 @@ In-person appointments · multi-currency · recurring appointment packages · in
 | **Attendance is forgeable by link click** | High — it gates payouts | Zoom participant report is authoritative for disputes (REQ-MEET-4) |
 | **Worker is a single point of failure** for all side effects, and self-hosting means we own its uptime | High | Idempotent reconciler design; boot-time reconciliation (REQ-ARCH-8); graceful degradation (REQ-NFR-8); hold TTL bounds damage. Note REQ-ARCH-7 — the fix is *not* simply running a second instance |
 | **Clinician declines after patient is charged** | Medium — poor patient experience | Automatic full refund within minutes; decline-rate flagging (REQ-INV-5) |
-| **DST / timezone errors** in slot materialisation | High — missed appointments | IANA-timezone-aware expansion; explicit DST test cases as a release blocker |
+| **DST / timezone errors** when deriving bookable times | High — missed appointments | IANA-timezone-aware expansion on both sides; explicit DST test cases as a release blocker |
 | **Regulatory exposure** from health data and clinical claims | High | Field-level access control on intake data; explicit introduction-service positioning (REQ-NFR-10); legal review before launch |
 | **Saasufy query syntax is whitespace-strict** | Medium — silent wrong results | Single tested query-builder helper (REQ-SEARCH-18) |
 | **Search degrades as the marketplace grows** | Medium — accepted deliberately; the scan is proportional to the listed directory (§6.4.2) | Revisit at low tens of thousands of listed practitioners; the escape hatch is an indexed `multi` key field, documented in §6.4.2 |

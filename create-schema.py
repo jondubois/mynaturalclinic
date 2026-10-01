@@ -394,7 +394,11 @@ field_access(m, {
 })
 
 print('== Availability ==')
-m = model('Availability', 4, accessCreate='restrict', accessRead='restrict',
+# accessRead is 'allow': the /book calendar is drawn from these blocks in the
+# patient's browser, and a patient has no account at that point. Nothing here is
+# private — it is the same "when I work" the calendar then renders. Search still
+# goes through the utcHours rollup on Clinician, which a view *can* reach.
+m = model('Availability', 4, accessCreate='restrict', accessRead='allow',
           accessUpdate='restrict', accessDelete='restrict', **OWNER)
 fields(m, 'Availability', [
     {'name': 'accountId', 'type': S, 'required': True},
