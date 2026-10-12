@@ -25,7 +25,7 @@ ID and secret and provisions the client inside Keycloak automatically.
 | Registration | append `&prompt=create` to the authorize URL |
 | Environments | `keycloak` (prod) and `keycloak:dev`, one `OAuthProvider` record each, each with its own Keycloak client |
 | Client ID | prod `saasufy-<accountId>`; dev is suffixed, `saasufy-<accountId>-dev` — both auto-generated |
-| Redirect URI | dev `http://localhost:8100/*`; prod `https://saasufy.com/sid8016/files/App/<recordId>/file/*` |
+| Redirect URI | dev `http://localhost:8100/*`; prod `https://sid8016.saasufy.com/files/App/<recordId>/file/*` |
 | Logout URL | `https://auth.saasufy.com/realms/tenant/protocol/openid-connect/logout` |
 
 The canonical endpoints live in the `keycloak` entry of <https://saasufy.com/oauth-settings.js>

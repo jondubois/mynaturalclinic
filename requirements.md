@@ -27,7 +27,7 @@ Saasufy is a realtime datastore with declarative frontend web components. It giv
 - Model- and field-level **access control** enforced on both the WebSocket and HTTP protocols.
 - **Realtime sync** — clients subscribe to view and field changes over WebSocket.
 - **OAuth**, including a default shared **Keycloak** instance at `https://auth.saasufy.com` for email signup.
-- **File hosting** for `blob` fields, served at `/:serviceId/files/:model/:id/:field`.
+- **File hosting** for `blob` fields, served at `/files/:model/:id/:field` on the service subdomain (`:serviceId.saasufy.com`), or at `/:serviceId/files/:model/:id/:field` on the bare host.
 - **Aggregation pipelines** that maintain derived collections in realtime.
 - Declarative components: `socket-provider`, `app-router`, `collection-viewer`, `collection-adder(-form)`, `model-viewer`, `model-input`, `model-text`, `input-provider`, `input-combiner`, `input-transformer`, `if-group`, `switch-group`, `render-group`, `oauth-link`, `oauth-handler`, `log-out`, modals.
 

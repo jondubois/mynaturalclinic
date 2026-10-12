@@ -1176,7 +1176,7 @@
                           <div class="d">{{Doc.institution}} · {{Doc.yearAwarded}}</div>
                           <!-- Documents are world-readable; we only surface the link once a
                                reviewer has approved the document. -->
-                          <div class="d small"><a href="https://saasufy.com/sid8016/files/Document/{{Doc.id}}/document"
+                          <div class="d small"><a href="https://sid8016.saasufy.com/files/Document/{{Doc.id}}/document"
                             target="_blank" rel="noopener">View certificate</a></div>
                         </div>
                         <span class="pill ok">verified</span>
@@ -1746,7 +1746,7 @@
                     <div slot="viewport"></div>
                   </if-group>
                   <if-group show-content="{{Doc.reviewStatus === 'approved'}}">
-                    <template slot="content"><div class="d small"><a href="https://saasufy.com/sid8016/files/Document/{{Doc.id}}/document"
+                    <template slot="content"><div class="d small"><a href="https://sid8016.saasufy.com/files/Document/{{Doc.id}}/document"
                       target="_blank" rel="noopener">View certificate</a></div></template>
                     <div slot="viewport"></div>
                   </if-group>
@@ -2134,7 +2134,7 @@
                     Practitioner: <a href="#/p/{{Doc.clinicianId}}"><model-text
                       model-type="Clinician" model-id="{{Doc.clinicianId}}"
                       model-field="displayName" default-value="View practitioner"></model-text></a> ·
-                    <a href="https://saasufy.com/sid8016/files/Document/{{Doc.id}}/document"
+                    <a href="https://sid8016.saasufy.com/files/Document/{{Doc.id}}/document"
                        target="_blank" rel="noopener">Supporting document</a>
                   </div>
                 </div>

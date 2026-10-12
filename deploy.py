@@ -10,7 +10,8 @@ OAuth provider.
     ./deploy.py --dry-run   # report the rewrites, upload nothing
 
 `deployURL` in config.json is both the replacement text and the upload target:
-its path names what to write, as `/:serviceId/files/:model/:recordId/:field`.
+its path names what to write, as `/files/:model/:recordId/:field` on the service
+subdomain (the older `/:serviceId/files/...` form is still accepted).
 
 Saasufy's HTTP API rejects request bodies over 1,000,000 bytes with "Payload Too
 Large", and base64 inflates the file by a third, so the source is whitespace-minified
@@ -38,12 +39,18 @@ BODY_LIMIT = 1000000  # measured; the API's cap on the whole request body
 
 scheme, _, rest = DEPLOY.partition('://')
 parts = rest.split('/')
-if not scheme or len(parts) != 6 or parts[2] != 'files':
+# Both URL forms serve files: the subdomain one and the older path one, which puts the
+# service id in the first path segment instead. Only the API prefix differs.
+if scheme and len(parts) == 5 and parts[1] == 'files':
+    api_root, (model, record, field) = parts[0], parts[2:]
+elif scheme and len(parts) == 6 and parts[2] == 'files':
+    api_root, (model, record, field) = '/'.join(parts[:2]), parts[3:]
+else:
     raise SystemExit(
-        f'deployURL must look like https://host/:serviceId/files/:model/:recordId/:field\n'
+        f'deployURL must look like https://:serviceId.host/files/:model/:recordId/:field\n'
+        f'  (or the older https://host/:serviceId/files/:model/:recordId/:field)\n'
         f'  got: {DEPLOY}')
-host, service, _, model, record, field = parts
-API = f'{scheme}://{host}/{service}/api/{model}/{record}'
+API = f'{scheme}://{api_root}/api/{model}/{record}'
 
 
 def call(method, url, body=None):
