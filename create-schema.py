@@ -438,8 +438,17 @@ views(m, [
 ])
 
 print('== TimeSlot ==')
+# accountId is comma-separated patient + clinician, as on Appointment. The spec has
+# the worker creating this row (REQ-BOOK-2), but until the worker exists the patient's
+# browser writes it from the payment success page, so the patient has to be an owner
+# too — and the clinician still needs update rights to cancel.
+#
+# There is no unique index on (clinicianId, startAt) and there does not need to be:
+# the id is derived from that pair as a UUIDv5 (REQ-BOOK-8), so the primary key is the
+# constraint. clinicianIdStartAt below is for range scans, not for uniqueness.
 m = model('TimeSlot', 5, accessCreate='restrict', accessRead='allow',
-          accessUpdate='restrict', accessDelete='restrict', **OWNER)
+          accessUpdate='restrict', accessDelete='restrict',
+          accessEnableMultipleOwners=True, **OWNER)
 fields(m, 'TimeSlot', [
     {'name': 'accountId', 'type': S, 'required': True},
     {'name': 'clinicianId', 'type': S, 'required': True},
@@ -477,6 +486,10 @@ fields(m, 'Appointment', [
     {'name': 'accountId', 'type': S, 'required': True},
     {'name': 'patientAccountId', 'type': S, 'required': True},
     {'name': 'clinicianAccountId', 'type': S, 'required': True},
+    # Denormalised from Patient, which the clinician cannot read: the invitation and
+    # the clinician's dashboard both name the patient.
+    {'name': 'patientName', 'type': S, 'max': 120},
+    {'name': 'patientTimezone', 'type': S, 'max': 60},
     {'name': 'clinicianId', 'type': S, 'required': True},
     {'name': 'timeSlotId', 'type': S, 'required': True},
     {'name': 'startAt', 'type': N, 'required': True},
@@ -499,6 +512,9 @@ fields(m, 'Appointment', [
     {'name': 'pinTransferToken', 'type': S, 'max': 200},
     {'name': 'inviteToken', 'type': S, 'max': 200},
     {'name': 'inviteRespondedAt', 'type': N, 'defaultValue': '0'},
+    # Why the clinician declined, in their own words. Shown to the patient, so it is
+    # readable by both owners like the rest of the record.
+    {'name': 'declineReason', 'type': S, 'max': 500},
     {'name': 'inviteExpiresAt', 'type': N, 'defaultValue': '0'},
     {'name': 'meetingTokenPatient', 'type': S, 'max': 200},
     {'name': 'meetingTokenClinician', 'type': S, 'max': 200},
@@ -516,19 +532,27 @@ indexes(m, [
     {'name': 'clinicianAccountIdStartAt', 'fields': 'clinicianAccountId,startAt'},
     {'name': 'statusStartAt', 'fields': 'status,startAt'},
 ])
+# Both party views take their account id in a param named `accountId` — the model's
+# accessModelAuthField — and not in one named after the column it is matched against.
+# A view over a `restrict` model is only readable if one of its params matches that
+# auth field; keyed on `patientAccountId` the view is not owner-protected, and every
+# read fails with "You do not have permission to perform the read operation on the
+# view". The param is still consumed by the index, so it filters as before: the value
+# the caller passes has to be their own, and it is matched against whichever party
+# column the view is about.
 views(m, [
-    {'name': 'patientView', 'paramFields': 'patientAccountId,fromAt,toAt,query',
-     'primaryFields': 'patientAccountId',
+    {'name': 'patientView', 'paramFields': 'accountId,fromAt,toAt,query',
+     'primaryFields': 'accountId',
      'transformIndex': 'patientAccountIdStartAt', 'transformIndexOperation': 'between',
-     'transformIndexOperationInputA': '$paramFields.patientAccountId,$paramFields.fromAt',
-     'transformIndexOperationInputB': '$paramFields.patientAccountId,$paramFields.toAt',
+     'transformIndexOperationInputA': '$paramFields.accountId,$paramFields.fromAt',
+     'transformIndexOperationInputB': '$paramFields.accountId,$paramFields.toAt',
      'transformFilterType': 'advanced', 'transformFilterQuery': '$paramFields.query',
      'transformOrderByField': 'startAt', 'affectingFields': 'status,paymentStatus'},
-    {'name': 'clinicianView', 'paramFields': 'clinicianAccountId,fromAt,toAt,query',
-     'primaryFields': 'clinicianAccountId',
+    {'name': 'clinicianView', 'paramFields': 'accountId,fromAt,toAt,query',
+     'primaryFields': 'accountId',
      'transformIndex': 'clinicianAccountIdStartAt', 'transformIndexOperation': 'between',
-     'transformIndexOperationInputA': '$paramFields.clinicianAccountId,$paramFields.fromAt',
-     'transformIndexOperationInputB': '$paramFields.clinicianAccountId,$paramFields.toAt',
+     'transformIndexOperationInputA': '$paramFields.accountId,$paramFields.fromAt',
+     'transformIndexOperationInputB': '$paramFields.accountId,$paramFields.toAt',
      'transformFilterType': 'advanced', 'transformFilterQuery': '$paramFields.query',
      'transformOrderByField': 'startAt', 'affectingFields': 'status,payoutStatus'},
     {'name': 'statusDueView', 'paramFields': 'status,fromAt,toAt,query',
@@ -615,6 +639,26 @@ views(m, [
     {'name': 'dedupeView', 'paramFields': 'dedupeKey', 'primaryFields': 'dedupeKey',
      'transformIndex': 'dedupeKey', 'transformIndexOperation': 'equals',
      'transformIndexOperationInputA': '$paramFields.dedupeKey'},
+])
+
+print('== Patient ==')
+# A person who books consultations, and the details they give us. Its existence is
+# not what makes an account a patient — every account without a Clinician record is
+# one (REQ-AUTH-4). This only holds what the patient dashboard lets them edit, and
+# is created the first time they book.
+m = model('Patient', 11, accessCreate='restrict', accessRead='restrict',
+          accessUpdate='restrict', accessDelete='block', **OWNER)
+fields(m, 'Patient', [
+    {'name': 'accountId', 'type': S, 'required': True},
+    {'name': 'fullName', 'type': S, 'max': 120},
+    {'name': 'timezone', 'type': S, 'max': 60},
+    {'name': 'phone', 'type': S, 'max': 40},
+])
+indexes(m, [{'name': 'accountId', 'fields': 'accountId'}])
+views(m, [
+    {'name': 'accountView', 'paramFields': 'accountId', 'primaryFields': 'accountId',
+     'transformIndex': 'accountId', 'transformIndexOperation': 'equals',
+     'transformIndexOperationInputA': '$paramFields.accountId'},
 ])
 
 print('== Availability -> Clinician aggregations ==')

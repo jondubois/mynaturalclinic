@@ -299,30 +299,75 @@
   /* Last thing in the card, and .err/.note carry a bottom margin but no top. */
   .request-msg{margin:14px 0 0}
   .request-msg:empty{display:none}
+  .booking-auth{border-top:1px solid var(--border);margin-top:4px}
+  .pay-total{font-size:1.9rem;font-weight:700;margin:14px 0 2px}
+  .booking-done{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;
+    justify-content:center;background:var(--accent-soft);color:var(--accent);
+    font-size:1.2rem;margin-bottom:12px}
+  .booking-create-status:empty{display:none}
+  .appt-actions{margin-top:10px}
+  .appt-decline-form{margin-top:10px;max-width:460px}
+  .appt-msg{margin-top:10px;font-size:.86rem}
+  .appt-msg:empty{display:none}
 </style>
 </head>
 <body>
 
-<!-- ===================================================================
-     DEV NOTE
-     There is no Keycloak / OAuth wired up yet, so the browser socket is
-     unauthenticated. Saasufy therefore allows reads of models whose
-     accessRead is "allow" (Clinician, Category, Document, Review) and
-     refuses everything else.
+<!-- The booking a patient picked while anonymous. It has to survive the Keycloak
+     round trip, which leaves the origin and comes back as a fresh page load, so it
+     lives in sessionStorage (REQ-PAT-2) rather than in a component's state. Defined
+     before the callback routing below, which reads it to decide where to land. -->
+<script>
+  (function () {
+    var HELD = 'mnc.pendingBooking';     // the selection, until the Appointment exists
+    var BOOKED = 'mnc.bookedAppointment'; // the Appointment, so a reload cannot re-create it
 
-     DEV_ACCOUNT_ID below is the account associated with the HTTP API
-     credential (see .saasufy-dev-account). Seed data is owned by it.
-     When Keycloak lands, every occurrence is replaced by
-       {{socket.authToken ? socket.authToken.accountId : ''}}
-     and nothing else about these pages needs to change.
-     =================================================================== -->
+    function read(key) {
+      try { return JSON.parse(sessionStorage.getItem(key)) || null; } catch (e) { return null; }
+    }
+    function write(key, value) {
+      try {
+        if (value) sessionStorage.setItem(key, JSON.stringify(value));
+        else sessionStorage.removeItem(key);
+      } catch (e) { /* private browsing; the flow degrades to one page */ }
+    }
+
+    window.heldBooking = function () { return read(HELD); };
+    window.bookedAppointment = function () { return read(BOOKED); };
+    // Exactly one of the two is ever set. A new hold drops the last receipt, or
+    // booking the same practitioner twice in a visit would read as already paid; and
+    // the hold becomes the receipt in one step once the Appointment exists.
+    window.holdBooking = function (booking) { write(BOOKED, null); write(HELD, booking); };
+    window.bookingConfirmed = function (appointment) {
+      write(BOOKED, appointment);
+      write(HELD, null);
+    };
+  })();
+</script>
 
 <!-- Keycloak redirects back to the bare page URL with ?code=...&state=... and no
-     fragment, so route to the callback page before app-router first renders. -->
+     fragment, so route to the callback page before app-router first renders. A patient
+     who was mid-booking goes to the callback which resumes it; everyone else to the one
+     which lands on their dashboard. -->
 <script>
   (function () {
     var q = new URLSearchParams(location.search);
-    if (q.has('code') && q.has('state')) location.hash = '/auth/callback';
+    if (!q.has('code') || !q.has('state')) return;
+    location.hash = window.heldBooking() ? '/auth/callback/booking' : '/auth/callback';
+  })();
+</script>
+
+<!-- #/booking/resume exists because the oauth-handler's success URL is a fixed
+     attribute and cannot name the clinician. The held booking can. -->
+<script>
+  (function () {
+    function resume() {
+      if (location.hash !== '#/booking/resume') return;
+      var held = window.heldBooking();
+      location.hash = held ? '/booking/payment/' + held.clinicianId : '/browse';
+    }
+    window.addEventListener('hashchange', resume);
+    resume();
   })();
 </script>
 
@@ -512,8 +557,24 @@
   })();
 </script>
 <script>
+  // The companion worker. Nothing calls it yet: the appointment request went through
+  // POST /appointments/request (REQ-ARCH-12) while the patient was anonymous, and now
+  // signs them in first and writes the Appointment from the browser instead. The
+  // constant stays because every side effect still to come — the real charge, the
+  // refund, the Zoom meeting, the invite email — belongs there.
   // Rewritten to the production origin on deploy, via `rewrites` in config.json.
   window.WORKER_BASE_URL = 'http://localhost:8200';
+
+  // Where a patient is sent to pay. A hosted Pin Payments page stands in until the
+  // Pin.js checkout of REQ-BOOK-0 exists. Nothing redirects back from it yet, so the
+  // payment page also carries a link onwards to the success page.
+  window.PIN_PAYMENTS_URL = 'https://pay.pinpayments.com/s43s/test';
+
+  // Cloud functions are served by the service itself, so this is the same URL in
+  // both environments and deploy.py has nothing to rewrite here.
+  window.SAASUFY_FUNCTIONS_URL = 'https://saasufy.com/sid8016/functions';
+
+  window.PLATFORM_FEE_RATE = 0.15;   // REQ-BOOK-4
 </script>
 
 <!-- Booking calendar — a week of the clinician's open times, read back in the
@@ -564,6 +625,13 @@
     function dateLabel(date) {
       return FULL_DAYS[date.getDay()] + ' ' + date.getDate() + ' ' + MONTHS[date.getMonth()];
     }
+
+    // "Monday 3 November, 9:00 am – 9:30 am", in the viewer's own zone.
+    window.slotLabel = function (startAt, endAt) {
+      var start = new Date(startAt);
+      return dateLabel(start) + ', ' + clockLabel(start) +
+        (endAt ? ' – ' + clockLabel(new Date(endAt)) : '');
+    };
 
     window.zoneClock = function (at, zone) {
       try {
@@ -743,6 +811,8 @@
       message.className = 'request-msg';
       message.textContent = '';
       card.querySelector('.request-btn').disabled = false;
+      var auth = card.querySelector('.booking-auth');
+      if (auth) auth.hidden = true;
     }
 
     function draw(source) {
@@ -776,6 +846,8 @@
       if (viewport) viewport.innerHTML = draw(source);
     }
 
+    // No email field: Keycloak has a verified address already, and asking twice
+    // invites a mismatch between who pays and who the invitation reaches (REQ-PAT-4).
     function sendRequest(button) {
       var card = button.closest('.booking-request');
       var slot = card.bookingSlot;
@@ -785,39 +857,43 @@
         return input ? input.value.trim() : '';
       };
       if (!slot) return;
-      if (!field('patientName') || !field('patientEmail')) {
+      if (!field('patientName')) {
         message.className = 'request-msg err';
-        message.textContent = 'Your name and email are both needed — the invitation names you.';
+        message.textContent = 'Your name is needed — the invitation names you.';
         return;
       }
-      message.className = 'request-msg muted small';
-      message.textContent = 'Sending…';
-      button.disabled = true;
-      fetch(window.WORKER_BASE_URL + '/appointments/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          clinicianId: card.dataset.clinicianId,
-          startAt: slot.startAt,
-          endAt: slot.endAt,
-          patientName: field('patientName'),
-          patientEmail: field('patientEmail'),
-          patientTimezone: window.viewerTimeZone(),
-          intakeReason: field('intakeReason')
-        })
-      }).then(function (response) {
-        return response.text().then(function (body) {
-          if (!response.ok) throw new Error(body.slice(0, 200) || 'HTTP ' + response.status);
-          card.bookingSent = true;
-          message.className = 'request-msg note';
-          message.textContent = 'Sent. ' + card.dataset.name + ' has been emailed an ' +
-            'invitation for this time and will confirm it shortly.';
-        });
-      }).catch(function (error) {
+      // Appointment.intakeReason is capped at 500 characters by the schema. Rejecting
+      // it here rather than on the write keeps the only likely non-race failure out of
+      // the middle of a sequence which has already claimed the time.
+      if (field('intakeReason').length > 500) {
         message.className = 'request-msg err';
-        message.textContent = 'Could not reach the booking service: ' + error.message;
-        button.disabled = false;
+        message.textContent = 'That is a little long — 500 characters at most. ' +
+          'You can tell ' + card.dataset.name + ' the rest in the consultation.';
+        return;
+      }
+
+      window.holdBooking({
+        clinicianId: card.dataset.clinicianId,
+        startAt: slot.startAt,
+        endAt: slot.endAt,
+        patientName: field('patientName'),
+        patientTimezone: window.viewerTimeZone(),
+        intakeReason: field('intakeReason')
       });
+
+      // Signed in already: the account is all that was missing, so go straight to
+      // payment. Otherwise the Keycloak links below carry on from here, and the hold
+      // is what survives the round trip.
+      if (window.currentAccountId()) {
+        location.hash = '/booking/payment/' + card.dataset.clinicianId;
+        return;
+      }
+      card.bookingSent = true;
+      message.className = 'request-msg';
+      message.textContent = '';
+      button.disabled = true;
+      var auth = card.querySelector('.booking-auth');
+      if (auth) auth.hidden = false;
     }
 
     document.addEventListener('click', function (e) {
@@ -844,6 +920,560 @@
   })();
 </script>
 
+<!-- Payment and confirmation — the second half of the booking flow. The patient has
+     an account by the time either page renders, so unlike the calendar these talk to
+     Saasufy directly rather than to the worker. -->
+<script>
+  (function () {
+    function socket() {
+      var provider = document.querySelector('socket-provider');
+      return provider && provider.saasufySocket;
+    }
+
+    window.currentAccountId = function () {
+      var s = socket();
+      return s && s.authToken ? s.authToken.accountId : null;
+    };
+
+    // Polled rather than driven off the authStateChange stream: these pages are
+    // reached by a full page load straight after the Keycloak redirect, so the socket
+    // may not exist yet either, and there is nothing to listen on.
+    function whenAuthenticated(ok, fail) {
+      var waited = 0;
+      (function tick() {
+        var s = socket();
+        if (s && s.authState === 'authenticated' && s.authToken) return ok(s);
+        if (waited >= 15000) return fail(new Error('You are not signed in.'));
+        waited += 150;
+        setTimeout(tick, 150);
+      })();
+    }
+
+    function uuid() {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        var r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
+    }
+
+    // A TimeSlot's id is *derived* from (clinicianId, startAt) rather than random, so
+    // the primary key is the booking's uniqueness constraint (REQ-AVAIL-3). Two
+    // patients racing for the same instant compute the same id, both try to create it,
+    // and the database lets exactly one through — which is the serialisation REQ-BOOK-2
+    // wants and the reason this flow is safe without a single-writer worker.
+    //
+    // Anything else which creates a slot — the worker, a migration — must derive the id
+    // the same way or the constraint is silently lost. The namespace and the name are
+    // therefore a protocol, not an implementation detail: name is exactly
+    // `<clinicianId>:<startAt>`, startAt in epoch milliseconds with no padding.
+    var SLOT_NAMESPACE = '6f8c1e5a-3b47-4d2e-9a10-5c7e2d9f4b83';
+
+    function uuidv5(namespace, name) {
+      var flat = namespace.replace(/-/g, '');
+      var nameBytes = new TextEncoder().encode(name);
+      var bytes = new Uint8Array(16 + nameBytes.length);
+      for (var i = 0; i < 16; i++) bytes[i] = parseInt(flat.substr(i * 2, 2), 16);
+      bytes.set(nameBytes, 16);
+      return crypto.subtle.digest('SHA-1', bytes).then(function (hash) {
+        var h = new Uint8Array(hash).subarray(0, 16);
+        h[6] = (h[6] & 0x0f) | 0x50;   // version 5
+        h[8] = (h[8] & 0x3f) | 0x80;   // RFC 4122 variant
+        var hex = '';
+        for (var j = 0; j < 16; j++) hex += (h[j] + 0x100).toString(16).substr(1);
+        return [hex.substr(0, 8), hex.substr(8, 4), hex.substr(12, 4),
+                hex.substr(16, 4), hex.substr(20)].join('-');
+      });
+    }
+
+    function slotIdFor(clinicianId, startAt) {
+      // crypto.subtle needs a secure context. Dev is localhost and production is
+      // https, both of which qualify; anything else must fail loudly rather than fall
+      // back to a random id, which would quietly drop the constraint above.
+      if (!window.crypto || !crypto.subtle) {
+        return Promise.reject(patientError('this browser cannot complete the booking ' +
+          'securely. The page must be served over HTTPS.'));
+      }
+      return uuidv5(SLOT_NAMESPACE, clinicianId + ':' + startAt);
+    }
+
+    // Something the patient can act on, as opposed to a failure we only report.
+    function patientError(message) {
+      var error = new Error(message);
+      error.patientFacing = true;
+      return error;
+    }
+
+    // A write which failed for its own reasons rather than because the booking is
+    // impossible. The time is already claimed and both ids are settled, so the right
+    // answer is to run the same sequence again, not to unpick what landed.
+    function retryableError(error) {
+      var next = new Error(error && error.message || 'the service did not answer');
+      next.retryable = true;
+      return next;
+    }
+
+    function esc(text) {
+      return String(text == null ? '' : text).replace(/[&<>"]/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+      });
+    }
+
+    function money(cents) {
+      return '$' + ((Number(cents) || 0) / 100).toFixed(2);
+    }
+
+    // Both pages describe the same instant the same way: the viewer's zone first,
+    // because that is the one they will act on, and the clinician's after it.
+    function whenHTML(booking, clinician) {
+      var theirs = window.zoneClock(booking.startAt, clinician.timezone);
+      return '<p class="chosen">' + esc(window.slotLabel(booking.startAt, booking.endAt)) +
+        ' (' + esc(window.viewerTimeZone()) + ')</p>' +
+        (theirs ? '<p class="chosen-sub">' + esc(clinician.displayName) +
+          ' sees this as ' + esc(theirs) + ', ' + esc(clinician.timezone) + '.</p>' : '');
+    }
+
+    function practitionerHTML(clinician) {
+      return '<p class="muted" style="margin:0">' + esc(clinician.professionalTitle) + '</p>' +
+        '<h2 style="margin:2px 0 10px">' + esc(clinician.displayName) + '</h2>';
+    }
+
+    function nothingHeldHTML(what) {
+      return '<div class="card"><h2>' + what + '</h2>' +
+        '<p class="muted">The time you picked is no longer held in this tab — it is kept ' +
+        'only for the length of the visit. Choose a time again and it will take a moment.</p>' +
+        '<div class="btn-row"><a class="btn" href="#/browse">Find a practitioner</a></div></div>';
+    }
+
+    // ---------------------------------------------------------------- payment
+
+    window.paymentPrompt = function (clinician) {
+      var held = window.heldBooking();
+      var booked = window.bookedAppointment();
+      if (booked && booked.clinicianId === clinician.id) {
+        return '<div class="card"><h2>Already paid</h2>' +
+          '<p class="muted">This appointment is confirmed.</p>' +
+          '<div class="btn-row"><a class="btn" href="#/booking/confirmed/' +
+          esc(clinician.id) + '">See the details</a></div></div>';
+      }
+      if (!held) return nothingHeldHTML('Nothing to pay for');
+
+      var amount = Number(clinician.priceAmount) || 0;
+      return '<div class="card">' + practitionerHTML(clinician) + whenHTML(held, clinician) +
+        '<p class="muted small">' + esc(clinician.consultationMinutes) +
+        ' minutes online, booked for ' + esc(held.patientName) + '.</p>' +
+        '<div class="pay-total">' + money(amount) + ' AUD</div>' +
+        '<p class="muted small">One payment, inclusive of our fee (REQ-BOOK-7). We hold it ' +
+        'and pass it on to ' + esc(clinician.displayName) +
+        ' only after the consultation has taken place.</p>' +
+        '<div class="btn-row"><a class="btn" href="' + esc(window.PIN_PAYMENTS_URL) +
+        '" target="_blank" rel="noopener">Pay ' + money(amount) + ' with Pin Payments</a></div>' +
+        '<div class="note"><strong>The checkout is a stand-in.</strong> That link opens a ' +
+        'hosted Pin Payments page which knows nothing about this booking and will not send ' +
+        'you back here. The Pin.js card form of REQ-BOOK-0 and the webhook which confirms ' +
+        'the charge (REQ-BOOK-6) are not built yet, so follow the link below once you are ' +
+        'done to see what happens after a real payment.</div>' +
+        '<p class="small"><a href="#/booking/confirmed/' + esc(clinician.id) +
+        '">I have completed payment &rarr;</a></p>' +
+        '</div>';
+    };
+
+    // ------------------------------------------------------------ confirmation
+
+    // Writing happens on render, so a re-render — a field change on the clinician
+    // record is enough — must not write twice. The flag covers the span before the
+    // receipt lands in sessionStorage, which covers everything after it.
+    var creating = null;
+    var inFlight = null;   // the clinician record a retry would use
+
+    function status(text, className, retry) {
+      var node = document.querySelector('.booking-create-status');
+      if (!node) return;
+      node.className = 'booking-create-status ' + (className || 'muted small');
+      node.textContent = text;
+      if (!retry) return;
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn sec booking-retry';
+      button.textContent = 'Try again';
+      node.appendChild(document.createElement('br'));
+      node.appendChild(button);
+    }
+
+    // The create *is* the lock. The loser of a race gets a duplicate primary key
+    // back, and only then is the row read — to decide what to tell them, never to
+    // decide whether to write. A read-then-create would reopen the very window the
+    // derived id closes.
+    function claimSlot(s, accountId, slot) {
+      return s.invoke('crud', { action: 'create', type: 'TimeSlot', value: slot })
+        .then(function () {
+          return { created: true, appointmentId: slot.appointmentId };
+        })
+        .catch(function (error) {
+          return s.invoke('crud', { action: 'read', type: 'TimeSlot', id: slot.id })
+            .then(function (existing) {
+              if (!existing) throw error;   // a real failure, not a collision
+              // Status before ownership. A row released back to 'open' by a
+              // cancellation or decline (REQ-INV-4) survives, and nothing here may
+              // turn it into a booking again: another patient does not own it, and
+              // reviving our own would confirm the cancelled appointment it still
+              // names. The worker owns that transition (REQ-BOOK-8).
+              if (existing.status !== 'held' && existing.status !== 'booked') {
+                throw patientError('that time was released by an earlier booking and ' +
+                  'cannot be re-booked here yet. Nothing has been charged.');
+              }
+              var owners = String(existing.accountId || '').split(',');
+              if (owners.indexOf(accountId) >= 0) {
+                // Ours, and still live: this page has run before. Carry on with the
+                // appointment id the row already names — writing it is idempotent, so
+                // a booking which half-finished completes rather than duplicating.
+                return { created: false, appointmentId: existing.appointmentId || '' };
+              }
+              throw patientError('that time was taken while you were paying. ' +
+                'Nothing has been charged — choose another time.');
+            }, function () { throw error; });
+        });
+    }
+
+    function createAppointment(held, clinician) {
+      whenAuthenticated(function (s) {
+        var accountId = s.authToken.accountId;
+        var amount = Number(clinician.priceAmount) || 0;
+        var fee = Math.round(amount * window.PLATFORM_FEE_RATE);
+        // Comma-separated owners: the patient reads their own booking, the clinician
+        // reads the invitation. Both models enable multiple owners for this.
+        var owners = accountId + ',' + clinician.accountId;
+
+        function appointmentValue(appointmentId, slotId) {
+          return {
+            id: appointmentId, accountId: owners,
+            patientAccountId: accountId, clinicianAccountId: clinician.accountId,
+            clinicianId: clinician.id, timeSlotId: slotId,
+            startAt: held.startAt, endAt: held.endAt,
+            // Not 'paid': the Pin webhook is the only authority on that (REQ-BOOK-6)
+            // and it is not wired up, so paymentStatus stays 'none' and the
+            // clinician's invitation is what moves next.
+            status: 'pending_clinician',
+            patientName: held.patientName,
+            patientTimezone: held.patientTimezone,
+            intakeReason: held.intakeReason || '',
+            amount: amount, platformFee: fee, clinicianPayout: amount - fee,
+            currency: 'AUD'
+          };
+        }
+
+        slotIdFor(clinician.id, held.startAt).then(function (slotId) {
+          // The slot names its appointment from the moment it is claimed, before that
+          // appointment exists. It is a forward reference on purpose: it is what makes
+          // a second attempt land on the same row instead of booking a second time.
+          var appointmentId = uuid();
+          return claimSlot(s, accountId, {
+            id: slotId, accountId: owners, clinicianId: clinician.id,
+            startAt: held.startAt, endAt: held.endAt, status: 'booked',
+            appointmentId: appointmentId,
+            priceAmount: amount,
+            consultationMinutes: Number(clinician.consultationMinutes) || 0
+          }).then(function (claim) {
+            var id = claim.appointmentId || appointmentId;
+            return s.invoke('crud', {
+              action: 'create', type: 'Appointment', value: appointmentValue(id, slotId)
+            }).catch(function (error) {
+              // It may have landed and only the answer been lost, which a second
+              // attempt would otherwise read as a fresh failure.
+              return s.invoke('crud', { action: 'read', type: 'Appointment', id: id })
+                .then(function (existing) {
+                  if (existing) return null;
+                  throw retryableError(error);
+                }, function () { throw retryableError(error); });
+            }).then(function () {
+              if (claim.created) return id;
+              // An older row with no appointmentId — point it at the one just written.
+              return s.invoke('crud', {
+                action: 'update', type: 'TimeSlot', id: slotId,
+                field: 'appointmentId', value: id
+              }).catch(function () {}).then(function () { return id; });
+            });
+          });
+        }).then(function (appointmentId) {
+          window.bookingConfirmed({
+            appointmentId: appointmentId, clinicianId: clinician.id,
+            startAt: held.startAt, endAt: held.endAt, patientName: held.patientName
+          });
+          seedPatient(s, accountId, held);
+          // The appointment exists from here on. Failing to queue the email is a
+          // smaller, separate problem and must not read as a failed booking.
+          sendInvite(s, appointmentId).then(function () {
+            status('Your practitioner has been notified.', 'muted small');
+          }).catch(function (error) {
+            status('Your appointment is recorded, but ' + error.message +
+              '. We will chase it up.', 'err');
+          });
+        }).catch(function (error) {
+          creating = null;
+          if (error.patientFacing) {
+            return status('Sorry — ' + error.message, 'err');
+          }
+          if (error.retryable) {
+            // The time is held and nothing is lost; only the appointment record is
+            // missing, and running the same sequence again writes exactly it.
+            return status('Your time is held, but the appointment could not be ' +
+              'recorded: ' + error.message + '.', 'err', true);
+          }
+          status('The appointment could not be recorded: ' + error.message +
+            ' Nothing has been charged.', 'err');
+        });
+      }, function (error) {
+        creating = null;
+        status(error.message + ' Sign in and come back to this page.', 'err');
+      });
+    }
+
+    // Their first booking is also where their patient profile comes from, so the
+    // dashboard has something to edit. Read first: the name they have already saved
+    // there is theirs to change, and this booking's must not overwrite it. Best
+    // effort throughout — a profile is not worth failing a paid booking over.
+    function seedPatient(s, accountId, held) {
+      s.invoke('crud', {
+        action: 'read', type: 'Patient', view: 'accountView',
+        viewParams: { accountId: accountId }, offset: 0, pageSize: 1
+      }).then(function (result) {
+        if (result && result.data && result.data.length) return null;
+        return s.invoke('crud', {
+          action: 'create', type: 'Patient',
+          value: {
+            accountId: accountId,
+            fullName: held.patientName, timezone: held.patientTimezone
+          }
+        });
+      }).catch(function () {});
+    }
+
+    // The invite email (§6.6) will be sent from here. The cloud function only logs
+    // for now; it verifies this token and refuses an appointment the caller does not
+    // own, so a failure here is worth surfacing.
+    function sendInvite(s, appointmentId) {
+      return fetch(window.SAASUFY_FUNCTIONS_URL + '/appointmentInvite', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + s.signedAuthToken
+        },
+        body: JSON.stringify({ appointmentId: appointmentId })
+      }).then(function (response) {
+        if (!response.ok) throw new Error('the invitation could not be queued (HTTP ' +
+          response.status + ')');
+      });
+    }
+
+    window.bookingConfirmation = function (clinician) {
+      var booked = window.bookedAppointment();
+      var held = window.heldBooking();
+      var booking = (booked && booked.clinicianId === clinician.id) ? booked : held;
+      if (!booking) return nothingHeldHTML('Nothing to confirm');
+
+      var pending = '';
+      if (!booked) {
+        inFlight = clinician;
+        if (creating !== booking.startAt) {
+          creating = booking.startAt;
+          setTimeout(function () { createAppointment(booking, clinician); }, 0);
+        }
+        pending = 'Recording your appointment…';
+      }
+
+      return '<div class="card">' +
+        '<div class="booking-done">&#10003;</div>' +
+        '<h2 style="margin:0 0 4px">Your appointment is scheduled</h2>' +
+        '<p class="muted" style="margin:0 0 14px">with ' +
+        esc(clinician.professionalTitle) + ' ' + esc(clinician.displayName) + '</p>' +
+        whenHTML(booking, clinician) +
+        '<p class="muted small">' + esc(clinician.consultationMinutes) +
+        ' minutes online. We have emailed ' + esc(clinician.displayName) +
+        ' an invitation for this time; you will hear from us as soon as they accept it, ' +
+        'and the meeting link arrives with that confirmation.</p>' +
+        '<p class="booking-create-status muted small">' + esc(pending) + '</p>' +
+        '<div class="btn-row"><a class="btn sec" href="#/dashboard">Your appointments</a>' +
+        '<a class="btn sec" href="#/browse">Book another</a></div>' +
+        '</div>';
+    };
+
+    // Retrying rather than unwinding: the slot is claimed, both ids are settled and
+    // every write in the sequence is idempotent, so the same run finishes the job.
+    document.addEventListener('click', function (e) {
+      if (!e.target || !e.target.closest || !e.target.closest('.booking-retry')) return;
+      var held = window.heldBooking();
+      if (!held || !inFlight) return;
+      creating = held.startAt;
+      status('Recording your appointment…', 'muted small');
+      createAppointment(held, inFlight);
+    });
+
+    // ------------------------------------------------- accept and decline
+
+    // REQ-INV-2's dashboard half. The clinician is an owner of both rows, so both
+    // writes are theirs to make and no server-side code is needed for the decision
+    // itself — only for the consequences, which is why the refund is not here.
+    function apptRow(node) { return node.closest('.appt-row'); }
+
+    function apptMessage(row, text, className) {
+      var node = row.querySelector('.appt-msg');
+      if (!node) return;
+      node.className = 'appt-msg ' + (className || 'muted small');
+      node.textContent = text;
+    }
+
+    function setBusy(row, busy) {
+      ['.appt-accept', '.appt-decline', '.appt-decline-confirm'].forEach(function (sel) {
+        var button = row.querySelector(sel);
+        if (button) button.disabled = busy;
+      });
+    }
+
+    function respond(row, decision, reason) {
+      var s = socket();
+      var id = row.dataset.appointmentId;
+      if (!s || !id) return;
+      setBusy(row, true);
+      apptMessage(row, decision === 'confirmed' ? 'Accepting…' : 'Declining…');
+
+      // Re-read first. The row may have been answered in another tab, or the patient
+      // may have cancelled since this page was drawn — and the browser has no way to
+      // make the check and the write one atomic step, so the check has to be fresh
+      // rather than trusted from the render.
+      s.invoke('crud', { action: 'read', type: 'Appointment', id: id, field: 'status' })
+        .then(function (current) {
+          if (current !== 'pending_clinician') {
+            throw new Error('this appointment is no longer waiting on you — it is now ' +
+              (current || 'in another state') + '.');
+          }
+          var value = { status: decision, inviteRespondedAt: Date.now() };
+          if (decision === 'declined') value.declineReason = reason || '';
+          return s.invoke('crud', { action: 'update', type: 'Appointment', id: id, value: value });
+        })
+        .then(function () {
+          // Status first, slot second, and never the other way round: freeing the time
+          // before the appointment is declined would let someone book an instant this
+          // clinician is still committed to. A slot left behind is the safe failure.
+          if (decision !== 'declined') return null;
+          return releaseSlot(s, row);
+        })
+        .then(function () {
+          if (decision === 'confirmed') {
+            return apptMessage(row, 'Accepted. The patient can see it now; the meeting ' +
+              'link follows once video is wired up.', 'muted small');
+          }
+          apptMessage(row, 'Declined, and the time is open for booking again. The refund ' +
+            'is not automatic yet — it still has to be issued in Pin.', 'note');
+        })
+        .catch(function (error) {
+          setBusy(row, false);
+          apptMessage(row, 'Sorry — ' + error.message, 'err');
+        });
+    }
+
+    // Deleting the row rather than setting it back to 'open': an 'open' slot stays
+    // owned by this appointment's two parties, so the next patient's create would
+    // collide on the derived id and they could neither take it nor update it. Removing
+    // it is what actually makes the instant bookable again. Nothing is lost — the
+    // declined Appointment keeps its own startAt and endAt.
+    function releaseSlot(s, row) {
+      var slotId = row.dataset.timeSlotId;
+      if (!slotId) return null;
+      return s.invoke('crud', { action: 'delete', type: 'TimeSlot', id: slotId })
+        .catch(function () {
+          // The decline stands either way; this only leaves a time still showing as
+          // taken, which is visible and fixable, so it must not fail the decline.
+          apptMessage(row, 'Declined. The time could not be reopened automatically — ' +
+            'it may still show as taken.', 'err');
+        });
+    }
+
+    document.addEventListener('click', function (e) {
+      if (!e.target || !e.target.closest) return;
+      var hit = e.target.closest('.appt-accept,.appt-decline,.appt-decline-confirm,' +
+        '.appt-decline-cancel');
+      if (!hit) return;
+      var row = apptRow(hit);
+      if (!row) return;
+      var form = row.querySelector('.appt-decline-form');
+
+      if (hit.classList.contains('appt-accept')) return respond(row, 'confirmed');
+      // Declining asks once more, and is where the reason is offered.
+      if (hit.classList.contains('appt-decline')) {
+        if (form) form.hidden = false;
+        return apptMessage(row, '', 'muted small');
+      }
+      if (hit.classList.contains('appt-decline-cancel')) {
+        if (form) form.hidden = true;
+        return apptMessage(row, '', 'muted small');
+      }
+      var input = row.querySelector('[name=declineReason]');
+      respond(row, 'declined', input ? input.value.trim() : '');
+    });
+
+    // ------------------------------------------------------- dashboard helpers
+
+    var HORIZON_DAYS = 365;
+
+    // Appointment's patientView and clinicianView both range over startAt, so a
+    // dashboard list is a window around today rather than a status query. Past
+    // appointments stay reachable by asking for the window behind us.
+    //
+    // The id goes in a param named `accountId` for both views, which is the model's
+    // accessModelAuthField: a view over a `restrict` model is only readable if one of
+    // its params is that field, and the server checks the value against the caller's
+    // own token. Which party column it is matched against is the view's business, not
+    // the caller's — so there is nothing to pass but your own id.
+    //
+    // Whole days rather than `now`, for the same reason as the calendar: a bound that
+    // moved on every render would refetch each time. Today's midnight also means an
+    // appointment which started an hour ago is still listed as coming up, which is
+    // what someone running late needs to see.
+    window.appointmentParams = function (accountId, direction, query) {
+      var past = direction === 'past';
+      return 'accountId=' + accountId +
+        ',fromAt:number=' + window.dayStartAt(past ? -HORIZON_DAYS : 0) +
+        ',toAt:number=' + window.dayStartAt(past ? 0 : HORIZON_DAYS) +
+        ',query=' + (query || '');
+    };
+
+    // Every state of §6.5 named explicitly, so a status nobody thought about shows up
+    // as itself rather than as a blank.
+    var STATES = {
+      pending_payment:     ['pend', 'awaiting payment'],
+      pending_clinician:   ['pend', 'awaiting the practitioner'],
+      confirmed:           ['ok',   'confirmed'],
+      declined:            ['no',   'declined'],
+      expired:             ['no',   'expired'],
+      cancelled_patient:   ['no',   'cancelled by you'],
+      cancelled_clinician: ['no',   'cancelled by the practitioner'],
+      completed:           ['ok',   'completed'],
+      no_show_patient:     ['no',   'you did not attend'],
+      no_show_clinician:   ['no',   'the practitioner did not attend'],
+      disputed:            ['no',   'disputed']
+    };
+    var CLINICIAN_STATES = {
+      pending_payment:   ['pend', 'awaiting the patient&rsquo;s payment'],
+      pending_clinician: ['pend', 'needs your answer'],
+      cancelled_patient: ['no',   'cancelled by the patient'],
+      no_show_patient:   ['no',   'the patient did not attend'],
+      no_show_clinician: ['no',   'you did not attend']
+    };
+
+    window.appointmentPill = function (status, audience) {
+      var state = (audience === 'clinician' && CLINICIAN_STATES[status]) ||
+        STATES[status] || ['', String(status || 'unknown')];
+      return '<span class="pill ' + state[0] + '">' + state[1] + '</span>';
+    };
+
+    // Rendered through {{ }}, which escapes, so this returns text rather than markup.
+    window.appointmentWhen = function (startAt, endAt, zone) {
+      return (zone && window.zoneClock(startAt, zone)) ||
+        window.slotLabel(startAt, endAt);
+    };
+  })();
+</script>
+
 <socket-provider url="wss://saasufy.com/sid8016/socketcluster/">
 
   <header class="site">
@@ -852,7 +1482,7 @@
       <nav class="main">
         <a href="#/">Home</a>
         <a href="#/browse">Browse</a>
-        <a href="#/clinician">Dashboard</a>
+        <a href="#/dashboard">Dashboard</a>
 
         <!-- The nav sits outside the main app-router, so if-group cannot be used
              here: it evaluates nothing itself and needs a template-rendering parent.
@@ -902,7 +1532,8 @@
 
   <div class="devbar">
     <div class="wrap">
-      Development build — <a href="#/clinician">sign in or join</a> to manage a practitioner profile.
+      Development build — <a href="#/dashboard">sign in</a> to see your appointments, or
+      <a href="#/clinician">join as a practitioner</a>.
     </div>
   </div>
 
@@ -912,7 +1543,7 @@
        re-runs renderCurrentPage on authStateChange but skips the render when the
        path is unchanged, so logging out while on that page left the old content in
        place. force-render-paths clears lastPageState for it so the branch re-evaluates. -->
-  <app-router default-page="/" auto-reset-window-scroll force-render-paths="/clinician">
+  <app-router default-page="/" auto-reset-window-scroll force-render-paths="/clinician,/dashboard">
 
     <!-- ============================ HOME ============================ -->
     <template slot="page" route-path="/">
@@ -1275,25 +1906,60 @@
               <h2>Confirm this appointment</h2>
               <p class="chosen"></p>
               <p class="chosen-sub"></p>
-              <div class="grid2">
-                <label class="f"><span class="lab">Your name</span>
-                  <input type="text" name="patientName" placeholder="Alex Moore"></label>
-                <label class="f"><span class="lab">Your email</span>
-                  <input type="email" name="patientEmail" placeholder="alex@example.com"></label>
-              </div>
+              <!-- No email field. Keycloak collects and verifies the address on the way
+                   to payment, and it is the one the invitation and the receipt use
+                   (REQ-PAT-4); asking here as well only invites the two to disagree. -->
+              <label class="f"><span class="lab">Your name</span>
+                <input type="text" name="patientName" placeholder="Alex Moore">
+                <span class="hint">{{Clinician.displayName}} sees this on the invitation.</span></label>
               <label class="f"><span class="lab">What would you like help with?</span>
-                <textarea name="intakeReason"
+                <textarea name="intakeReason" maxlength="500"
                   placeholder="A sentence or two — it goes in the invitation."></textarea>
-                <span class="hint">Seen only by {{Clinician.displayName}}.</span></label>
-              <div class="note"><strong>The worker is not built yet.</strong> This posts to
-                <code>POST /appointments/request</code> on the companion worker, which is what
-                emails {{Clinician.displayName}} an invitation to accept and add to their
-                calendar. Until that endpoint is running it will report that it could not be
-                reached.</div>
+                <span class="hint">Optional, up to 500 characters, and seen only by
+                  {{Clinician.displayName}}.</span></label>
               <div class="btn-row">
                 <button type="button" class="btn request-btn">Request this time</button>
               </div>
               <div class="request-msg"></div>
+
+              <!-- Revealed by the button rather than shown up front: the account is the
+                   last thing asked for, after the time and the reason are settled
+                   (REQ-PAT-1, REQ-PAT-3). The choice is held in sessionStorage, so the
+                   Keycloak round trip comes back to the payment step with it intact. -->
+              <div class="booking-auth" hidden>
+                <h3 style="margin:18px 0 2px">One last step</h3>
+                <p class="muted small">We need an account to take the payment and to send
+                  you the meeting link. Your email address comes from the sign-up — we do
+                  not ask for it twice.</p>
+                <div class="btn-row">
+                  <oauth-link
+                    provider="keycloak:dev"
+                    client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069-dev"
+                    redirect-uri="http://localhost:8100/index.html"
+                    grant-type="authorization_code"
+                  >
+                    <template slot="item">
+                      <a class="btn" href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}&amp;prompt=create">
+                        Create an account
+                      </a>
+                    </template>
+                    <div slot="viewport"></div>
+                  </oauth-link>
+                  <oauth-link
+                    provider="keycloak:dev"
+                    client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069-dev"
+                    redirect-uri="http://localhost:8100/index.html"
+                    grant-type="authorization_code"
+                  >
+                    <template slot="item">
+                      <a class="btn sec" href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}">
+                        I already have one
+                      </a>
+                    </template>
+                    <div slot="viewport"></div>
+                  </oauth-link>
+                </div>
+              </div>
             </div>
           </template>
           <template slot="no-item"><div class="card"><p class="muted">No such practitioner.</p></div></template>
@@ -1303,7 +1969,517 @@
       </div>
     </template>
 
-    <!-- ================== CLINICIAN DASHBOARD (signed out = join) ================== -->
+    <!-- ===================== PAYMENT AND CONFIRMATION =====================
+         Both pages render from the held booking, which lives in sessionStorage, but
+         wrap it in a model-viewer on the clinician: the practitioner's name, title,
+         price and timezone are read live rather than trusted from the hold.
+
+         /booking/resume is the landing spot after the Keycloak round trip, which
+         cannot carry the clinician id in a fixed success URL. A script near the top
+         of this file rewrites the hash from the hold; this page only covers the
+         moment in between. -->
+    <template slot="page" route-path="/booking/resume">
+      <div class="wrap"><div class="card"><div class="spin">Picking up where you left off…</div></div></div>
+    </template>
+
+    <template slot="page" route-path="/booking/payment/:clinicianId" no-auth-redirect="/browse" auto-reset-window-scroll>
+      <div class="wrap">
+        <h1>Complete your payment</h1>
+        <p class="muted">We take the payment now and hold it until the consultation has
+           taken place.</p>
+        <model-viewer
+          model-type="Clinician"
+          model-id="{{clinicianId}}"
+          model-fields="accountId,displayName,professionalTitle,timezone,priceAmount,consultationMinutes"
+          type-alias="C"
+        >
+          <template slot="item">{{{paymentPrompt(C)}}}</template>
+          <template slot="no-item"><div class="card"><p class="muted">No such practitioner.</p></div></template>
+          <template slot="loader"><div class="card"><div class="spin">Loading…</div></div></template>
+          <template slot="error"><div class="err">{{$C.error.message}}</div></template>
+          <div slot="viewport"></div>
+        </model-viewer>
+      </div>
+    </template>
+
+    <!-- Where Pin's redirect will land once the checkout of REQ-BOOK-0 exists. The
+         Appointment row is written here, by the patient's own browser, because the
+         worker which should own it (REQ-ARCH-12) is not built yet. -->
+    <template slot="page" route-path="/booking/confirmed/:clinicianId" no-auth-redirect="/browse" auto-reset-window-scroll>
+      <div class="wrap">
+        <model-viewer
+          model-type="Clinician"
+          model-id="{{clinicianId}}"
+          model-fields="accountId,displayName,professionalTitle,timezone,priceAmount,consultationMinutes"
+          type-alias="C"
+        >
+          <template slot="item">{{{bookingConfirmation(C)}}}</template>
+          <template slot="no-item"><div class="card"><p class="muted">No such practitioner.</p></div></template>
+          <template slot="loader"><div class="card"><div class="spin">Loading…</div></div></template>
+          <template slot="error"><div class="err">{{$C.error.message}}</div></template>
+          <div slot="viewport"></div>
+        </model-viewer>
+      </div>
+    </template>
+
+    <!-- ============================== DASHBOARD ==============================
+         One route, two dashboards. Which one you get is decided by whether a
+         Clinician record exists for the signed-in account — that is the whole of
+         what makes an account a practitioner (REQ-AUTH-4), so the role test is the
+         collection-viewer's own item/no-item branch and nothing is stored on the
+         account to be kept in step. The two share only what is genuinely the same
+         for both: your own details, and who you are signed in as. -->
+    <template slot="page" route-path="/dashboard" auto-reset-window-scroll>
+      <div class="wrap">
+
+        <if-group show-content="{{!socket.authToken}}">
+          <template slot="content">
+            <h1>Your dashboard</h1>
+            <div class="card">
+              <h2>Sign in to continue</h2>
+              <p class="muted">Patients find their appointments here. Practitioners manage
+                 their profile, their hours and their bookings.</p>
+              <div class="btn-row">
+                <oauth-link
+                  provider="keycloak:dev"
+                  client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069-dev"
+                  redirect-uri="http://localhost:8100/index.html"
+                  grant-type="authorization_code"
+                >
+                  <template slot="item">
+                    <a class="btn" href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}">Log in</a>
+                  </template>
+                  <div slot="viewport"></div>
+                </oauth-link>
+                <oauth-link
+                  provider="keycloak:dev"
+                  client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069-dev"
+                  redirect-uri="http://localhost:8100/index.html"
+                  grant-type="authorization_code"
+                >
+                  <template slot="item">
+                    <a class="btn sec" href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}&amp;prompt=create">Sign up</a>
+                  </template>
+                  <div slot="viewport"></div>
+                </oauth-link>
+              </div>
+              <p class="small muted" style="margin:14px 0 0">No account yet and want to
+                 offer consultations? <a href="#/clinician">Join as a practitioner</a>.</p>
+            </div>
+          </template>
+          <div slot="viewport"></div>
+        </if-group>
+
+        <if-group show-content="{{!!socket.authToken}}">
+          <template slot="content">
+            <collection-viewer
+              collection-type="Clinician"
+              collection-fields="accountId"
+              collection-view="accountView"
+              collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
+              collection-view-primary-fields="accountId"
+              collection-page-size="1"
+            >
+              <!-- A Clinician record exists: the practitioner dashboard. -->
+              <template slot="item">
+                <model-viewer
+                  model-type="Clinician"
+                  model-id="{{Clinician.id}}"
+                  model-fields="displayName,professionalTitle,bio,topics,country,region,city,timezone,priceAmount,consultationMinutes,listingStatus,listingNote,payoutStatus"
+                  type-alias="C"
+                >
+                  <template slot="item">
+                    <h1>{{C.listingStatus === 'listed' ? 'Your profile dashboard' : 'Your onboarding'}}</h1>
+                    <p class="muted">{{C.listingStatus === 'listed' ? 'Your profile is live in patient search. Update any section below and the changes go out straight away.' : 'Everything below must be complete before your profile appears in patient search.'}}</p>
+
+                    <!-- Sits outside the listed/onboarding wording above, so a
+                         suspension is surfaced whichever state it followed. -->
+                    <if-group show-content="{{C.listingStatus === 'suspended'}}">
+                      <template slot="content">
+                        <div class="err">
+                          <strong>Your listing is suspended.</strong> Your profile is not
+                          appearing in patient search and you cannot take new bookings.
+                          <switch-group show-cases="why={{!!C.listingNote}},noWhy={{!C.listingNote}}">
+                            <template slot="content" name="why">
+                              <div style="margin-top:6px">Reason given by the reviewer: {{C.listingNote}}</div>
+                            </template>
+                            <template slot="content" name="noWhy">
+                              <div style="margin-top:6px">No reason has been recorded yet.</div>
+                            </template>
+                            <div slot="viewport"></div>
+                          </switch-group>
+                        </div>
+                      </template>
+                      <div slot="viewport"></div>
+                    </if-group>
+
+                    <div class="card">
+                      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+                        <h2 style="margin:0">{{C.displayName}}</h2>
+                        <switch-group show-cases="draft={{C.listingStatus === 'draft'}},review={{C.listingStatus === 'pending_review'}},listed={{C.listingStatus === 'listed'}},susp={{C.listingStatus === 'suspended'}}">
+                          <template slot="content" name="draft"><span class="pill">draft</span></template>
+                          <template slot="content" name="review"><span class="pill pend">in review</span></template>
+                          <template slot="content" name="listed"><span class="pill ok">listed</span></template>
+                          <template slot="content" name="susp"><span class="pill no">suspended</span></template>
+                          <div slot="viewport"></div>
+                        </switch-group>
+                      </div>
+                      <div class="sub">{{C.professionalTitle}}</div>
+
+                      <ul class="check">
+                        <if-group show-content="{{C.listingStatus !== 'listed'}}">
+                          <template slot="content">
+                            <li>
+                              <div class="mark done">&#10003;</div>
+                              <div class="ck-body">
+                                <div class="t">Create your account</div>
+                                <div class="d">Email sign-up and verification, handled by our identity provider.</div>
+                              </div>
+                            </li>
+                          </template>
+                          <div slot="viewport"></div>
+                        </if-group>
+                        <li>
+                          <switch-group show-cases="listed={{C.listingStatus === 'listed'}},y={{C.listingStatus !== 'listed' && !!C.bio && C.bio.length >= 200 && !!C.displayName && !!C.priceAmount}},n={{C.listingStatus !== 'listed' && !(C.bio && C.bio.length >= 200 && C.displayName && C.priceAmount)}}">
+                            <template slot="content" name="listed"><div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.4"/><path d="M5.3 19.6a6.9 6.9 0 0 1 13.4 0"/></svg></div></template>
+                            <template slot="content" name="y"><div class="mark done">&#10003;</div></template>
+                            <template slot="content" name="n"><div class="mark todo"></div></template>
+                            <div slot="viewport"></div>
+                          </switch-group>
+                          <div class="ck-body">
+                            <div class="t"><a href="#/clinician/profile">{{C.listingStatus === 'listed' ? 'Update your profile' : 'Complete your profile'}}</a></div>
+                            <div class="d">Name, title, focus areas, location, fee and a biography of at least 200 characters.</div>
+                          </div>
+                        </li>
+                        <li>
+                          <switch-group show-cases="listed={{C.listingStatus === 'listed'}},n={{C.listingStatus !== 'listed'}}">
+                            <template slot="content" name="listed"><div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="5"/><path d="M8.7 13.3 7.6 21l4.4-2.3 4.4 2.3-1.1-7.7"/></svg></div></template>
+                            <template slot="content" name="n"><div class="mark todo"></div></template>
+                            <div slot="viewport"></div>
+                          </switch-group>
+                          <div class="ck-body">
+                            <div class="t"><a href="#/clinician/documents">{{C.listingStatus === 'listed' ? 'Update your documents' : 'Submit your documents'}}</a></div>
+                            <div class="d">At least one approved qualification is required.</div>
+                          </div>
+                        </li>
+                        <li>
+                          <switch-group show-cases="listed={{C.listingStatus === 'listed'}},y={{C.listingStatus !== 'listed' && C.payoutStatus === 'active'}},n={{C.listingStatus !== 'listed' && C.payoutStatus !== 'active'}}">
+                            <template slot="content" name="listed"><div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3 10h18"/></svg></div></template>
+                            <template slot="content" name="y"><div class="mark done">&#10003;</div></template>
+                            <template slot="content" name="n"><div class="mark todo"></div></template>
+                            <div slot="viewport"></div>
+                          </switch-group>
+                          <div class="ck-body">
+                            <div class="t"><a href="#/clinician/payouts">{{C.listingStatus === 'listed' ? 'Update payout details' : 'Add payout details'}}</a></div>
+                            <div class="d">Status: {{C.payoutStatus}}</div>
+                          </div>
+                        </li>
+                        <li>
+                          <switch-group show-cases="listed={{C.listingStatus === 'listed'}},n={{C.listingStatus !== 'listed'}}">
+                            <template slot="content" name="listed"><div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3.2v3.6M16 3.2v3.6"/></svg></div></template>
+                            <template slot="content" name="n"><div class="mark todo"></div></template>
+                            <div slot="viewport"></div>
+                          </switch-group>
+                          <div class="ck-body">
+                            <div class="t"><a href="#/clinician/availability">{{C.listingStatus === 'listed' ? 'Update your availability' : 'Publish your availability'}}</a></div>
+                            <div class="d">A weekly pattern the booking system turns into bookable times.</div>
+                          </div>
+                        </li>
+                      </ul>
+                    </div>
+
+
+                    <!-- The patient has committed by the time a row appears here, so
+                         this is the first thing a practitioner should see, and answering
+                         it is the first thing they should be able to do. The decision is
+                         theirs to write — they own the record — so it needs no
+                         server-side code; only its consequences do, which is why the
+                         refund is not here. -->
+                    <div class="card">
+                      <div class="sechead"><h2>Your appointments</h2></div>
+                      <div class="sub">Times are in your own timezone, {{C.timezone}}.</div>
+                      <collection-viewer
+                        collection-type="Appointment"
+                        type-alias="Appt"
+                        collection-fields="startAt,endAt,status,patientName,patientTimezone,intakeReason,declineReason,timeSlotId,clinicianPayout,currency"
+                        collection-view="clinicianView"
+                        collection-view-params="{{appointmentParams(socket.authToken ? socket.authToken.accountId : '', 'upcoming')}}"
+                        collection-view-primary-fields="accountId"
+                        collection-page-size="20"
+                      >
+                        <template slot="item">
+                          <div class="row appt-row"
+                            data-appointment-id="{{Appt.id}}"
+                            data-time-slot-id="{{Appt.timeSlotId}}"
+                          >
+                            <div class="grow">
+                              <div class="t">{{Appt.patientName}}</div>
+                              <div class="d">{{appointmentWhen(Appt.startAt, Appt.endAt, C.timezone)}}</div>
+                              <div class="d">{{Appt.intakeReason}}</div>
+
+                              <!-- Only a request actually waiting on them. clinicianView
+                                   re-emits on a status change, so these disappear of
+                                   their own accord once answered — here and in the other
+                                   tab the clinician left open. -->
+                              <if-group show-content="{{Appt.status === 'pending_clinician'}}">
+                                <template slot="content">
+                                  <div class="btn-row appt-actions">
+                                    <button type="button" class="btn appt-accept">Accept</button>
+                                    <button type="button" class="btn sec appt-decline">Decline</button>
+                                  </div>
+                                  <div class="appt-decline-form" hidden>
+                                    <label class="f"><span class="lab">Why are you declining?</span>
+                                      <input type="text" name="declineReason" maxlength="500"
+                                        placeholder="A clash, or outside what I treat">
+                                      <span class="hint">Optional, and the patient sees it.</span></label>
+                                    <div class="btn-row">
+                                      <button type="button" class="btn appt-decline-confirm">Decline this appointment</button>
+                                      <button type="button" class="btn sec appt-decline-cancel">Keep it</button>
+                                    </div>
+                                  </div>
+                                </template>
+                                <div slot="viewport"></div>
+                              </if-group>
+
+                              <if-group show-content="{{Appt.status === 'declined' && !!Appt.declineReason}}">
+                                <template slot="content">
+                                  <div class="d">You gave the reason: {{Appt.declineReason}}</div>
+                                </template>
+                                <div slot="viewport"></div>
+                              </if-group>
+
+                              <div class="appt-msg"></div>
+                            </div>
+                            <div style="text-align:right">
+                              {{{appointmentPill(Appt.status, 'clinician')}}}
+                              <div class="d">${{Appt.clinicianPayout / 100}} {{Appt.currency}} to you</div>
+                            </div>
+                          </div>
+                        </template>
+                        <template slot="no-item"><div class="empty">No appointments booked yet. Patients can only book once your profile is listed.</div></template>
+                        <template slot="loader"><div class="spin">Loading your appointments…</div></template>
+                        <template slot="error"><div class="err">{{$Appt.error.message}}</div></template>
+                        <div slot="viewport"></div>
+                      </collection-viewer>
+                    </div>
+
+                    <div class="card">
+                      <h2>Signed in</h2>
+                      <p class="muted" style="margin:0">
+                        <model-text model-type="Account"
+                          model-id="{{socket.authToken ? socket.authToken.accountId : ''}}"
+                          model-field="email" default-value="(account)"></model-text>
+                      </p>
+                      <if-group show-content="{{!!socket.authToken && !!socket.authToken.groupMemberships && socket.authToken.groupMemberships.includes('620af869-cb09-4a20-bcf4-ed10510b3367')}}">
+                        <template slot="content">
+                          <p style="margin:12px 0 0">
+                            <a class="btn sec" href="#/admin/reviews">Document review queue</a>
+                          </p>
+                        </template>
+                        <div slot="viewport"></div>
+                      </if-group>
+                    </div>
+
+                    <div class="card">
+                      <h2>Quick links</h2>
+                      <div class="btn-row">
+                        <a class="btn sec" href="#/clinician/profile">Profile</a>
+                        <a class="btn sec" href="#/clinician/documents">Documents</a>
+                        <a class="btn sec" href="#/clinician/availability">Availability</a>
+                        <a class="btn sec" href="#/clinician/payouts">Payouts</a>
+                        <a class="btn sec" href="#/p/{{C.id}}">Public preview</a>
+                      </div>
+                    </div>
+                  </template>
+                  <div slot="viewport"></div>
+                </model-viewer>
+              </template>
+
+              <!-- None does: a patient. -->
+              <template slot="no-item">
+                <h1>Your appointments</h1>
+                <p class="muted">Everything you have booked, and the details a
+                   practitioner sees when you do.</p>
+
+                <div class="card">
+                  <div class="sechead"><h2>Coming up</h2></div>
+                  <collection-viewer
+                    collection-type="Appointment"
+                    type-alias="Appt"
+                    collection-fields="startAt,endAt,status,clinicianId,declineReason,amount,currency"
+                    collection-view="patientView"
+                    collection-view-params="{{appointmentParams(socket.authToken ? socket.authToken.accountId : '', 'upcoming')}}"
+                    collection-view-primary-fields="accountId"
+                    collection-page-size="20"
+                  >
+                    <template slot="item">
+                      <!-- The practitioner's name is read from their record rather than
+                           copied onto the booking: a title or a name they correct later
+                           should correct here too. Two model-texts rather than a nested
+                           model-viewer, so .row stays the item's own root element —
+                           .row:first-child is what draws the separators. -->
+                      <div class="row">
+                        <div class="grow">
+                          <div class="t"><a href="#/p/{{Appt.clinicianId}}"><model-text
+                            model-type="Clinician" model-id="{{Appt.clinicianId}}"
+                            model-field="displayName" default-value="This practitioner"></model-text></a></div>
+                          <div class="d"><model-text
+                            model-type="Clinician" model-id="{{Appt.clinicianId}}"
+                            model-field="professionalTitle"></model-text></div>
+                          <div class="d">{{appointmentWhen(Appt.startAt, Appt.endAt)}} ({{viewerTimeZone()}})</div>
+                          <if-group show-content="{{Appt.status === 'declined' && !!Appt.declineReason}}">
+                            <template slot="content">
+                              <div class="d">Reason given: {{Appt.declineReason}}</div>
+                            </template>
+                            <div slot="viewport"></div>
+                          </if-group>
+                        </div>
+                        <div style="text-align:right">
+                          {{{appointmentPill(Appt.status, 'patient')}}}
+                          <div class="d">${{Appt.amount / 100}} {{Appt.currency}}</div>
+                        </div>
+                      </div>
+                    </template>
+                    <template slot="no-item"><div class="empty">Nothing booked yet.</div></template>
+                    <template slot="loader"><div class="spin">Loading…</div></template>
+                    <template slot="error"><div class="err">{{$Appt.error.message}}</div></template>
+                    <div slot="viewport"></div>
+                  </collection-viewer>
+                </div>
+
+                <div class="card">
+                  <div class="sechead"><h2>Past</h2></div>
+                  <collection-viewer
+                    collection-type="Appointment"
+                    type-alias="Appt"
+                    collection-fields="startAt,endAt,status,clinicianId,declineReason,amount,currency"
+                    collection-view="patientView"
+                    collection-view-params="{{appointmentParams(socket.authToken ? socket.authToken.accountId : '', 'past')}}"
+                    collection-view-primary-fields="accountId"
+                    collection-page-size="20"
+                  >
+                    <template slot="item">
+                      <!-- The practitioner's name is read from their record rather than
+                           copied onto the booking: a title or a name they correct later
+                           should correct here too. Two model-texts rather than a nested
+                           model-viewer, so .row stays the item's own root element —
+                           .row:first-child is what draws the separators. -->
+                      <div class="row">
+                        <div class="grow">
+                          <div class="t"><a href="#/p/{{Appt.clinicianId}}"><model-text
+                            model-type="Clinician" model-id="{{Appt.clinicianId}}"
+                            model-field="displayName" default-value="This practitioner"></model-text></a></div>
+                          <div class="d"><model-text
+                            model-type="Clinician" model-id="{{Appt.clinicianId}}"
+                            model-field="professionalTitle"></model-text></div>
+                          <div class="d">{{appointmentWhen(Appt.startAt, Appt.endAt)}} ({{viewerTimeZone()}})</div>
+                          <if-group show-content="{{Appt.status === 'declined' && !!Appt.declineReason}}">
+                            <template slot="content">
+                              <div class="d">Reason given: {{Appt.declineReason}}</div>
+                            </template>
+                            <div slot="viewport"></div>
+                          </if-group>
+                        </div>
+                        <div style="text-align:right">
+                          {{{appointmentPill(Appt.status, 'patient')}}}
+                          <div class="d">${{Appt.amount / 100}} {{Appt.currency}}</div>
+                        </div>
+                      </div>
+                    </template>
+                    <template slot="no-item"><div class="empty">No past appointments.</div></template>
+                    <template slot="loader"><div class="spin">Loading…</div></template>
+                    <template slot="error"><div class="err">{{$Appt.error.message}}</div></template>
+                    <div slot="viewport"></div>
+                  </collection-viewer>
+                </div>
+
+                <!-- The one thing both dashboards do the same way: your own
+                     details, edited in place. A patient's record is created by
+                     their first booking, so no-item is the state before that. -->
+                <div class="card">
+                  <h2>Your details</h2>
+                  <div class="sub">Changes save as you type.</div>
+                  <collection-viewer
+                    collection-type="Patient"
+                    collection-fields="accountId"
+                    collection-view="accountView"
+                    collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
+                    collection-view-primary-fields="accountId"
+                    collection-page-size="1"
+                  >
+                    <template slot="item">
+                      <div class="grid2">
+                        <label class="f"><span class="lab">Full name</span>
+                          <model-input type="text" model-type="Patient" model-id="{{Patient.id}}"
+                            model-field="fullName" show-error-message></model-input>
+                          <span class="hint">Shown to a practitioner on the invitation.</span></label>
+                        <label class="f"><span class="lab">Phone</span>
+                          <model-input type="text" model-type="Patient" model-id="{{Patient.id}}"
+                            model-field="phone" show-error-message></model-input>
+                          <span class="hint">Optional. Only used if a consultation goes wrong.</span></label>
+                      </div>
+                      <label class="f"><span class="lab">Timezone</span>
+                        <model-input type="select" options="Australia/Sydney,Australia/Melbourne,Australia/Brisbane,Australia/Adelaide,Australia/Perth,Australia/Hobart,Australia/Darwin,Pacific/Auckland"
+                          model-type="Patient" model-id="{{Patient.id}}"
+                          model-field="timezone" show-error-message></model-input>
+                        <span class="hint">Appointment times above are shown in this
+                          browser's timezone, {{viewerTimeZone()}}. This is the one we
+                          put in your reminders.</span></label>
+                    </template>
+                    <template slot="no-item">
+                      <p class="muted">Nothing saved yet — these are filled in the
+                         first time you book, and you can change them here afterwards.</p>
+                      <collection-adder-form
+                        collection-type="Patient"
+                        model-values="accountId={{socket.authToken ? socket.authToken.accountId : ''}},timezone={{viewerTimeZone()}}"
+                        computable-model-values
+                        success-message="Saved."
+                        trim-spaces
+                        show-field-errors
+                      >
+                        <div slot="message"></div>
+                        <label class="f"><span class="lab">Full name</span>
+                          <input type="text" name="fullName" placeholder="Alex Moore"></label>
+                        <input class="btn" type="submit" value="Save">
+                      </collection-adder-form>
+                    </template>
+                    <template slot="loader"><div class="spin">Loading your details…</div></template>
+                    <template slot="error"><div class="err">{{$Patient.error.message}}</div></template>
+                    <div slot="viewport"></div>
+                  </collection-viewer>
+                </div>
+
+                <div class="card">
+                  <h2>Signed in</h2>
+                  <p class="muted" style="margin:0">
+                    <model-text model-type="Account"
+                      model-id="{{socket.authToken ? socket.authToken.accountId : ''}}"
+                      model-field="email" default-value="(account)"></model-text>
+                  </p>
+                  <p class="small muted" style="margin:10px 0 0">Your email address
+                     belongs to your sign-in and is changed there, not here.</p>
+                </div>
+
+                <div class="card">
+                  <h2>Offer consultations yourself?</h2>
+                  <p class="muted">The same account can hold a practitioner profile.
+                     Registering one replaces this dashboard with the practitioner
+                     one.</p>
+                  <div class="btn-row"><a class="btn sec" href="#/clinician">Join as a practitioner</a></div>
+                </div>
+              </template>
+              <template slot="loader"><div class="spin">Loading your dashboard…</div></template>
+              <template slot="error"><div class="err">Could not load your dashboard: {{$Clinician.error.message}}</div></template>
+              <div slot="viewport"></div>
+            </collection-viewer>
+          </template>
+          <div slot="viewport"></div>
+        </if-group>
+
+      </div>
+    </template>
+
+    <!-- ============== JOIN AS A PRACTITIONER (also: create the profile) ============== -->
     <template slot="page" route-path="/clinician" auto-reset-window-scroll>
       <div class="wrap">
 
@@ -1368,186 +2544,56 @@
           <div slot="viewport"></div>
         </if-group>
 
-        <!-- Signed in: onboarding checklist, or the profile dashboard once listed. -->
+        <!-- Signed in: only the practitioner account itself. The dashboard proper
+             lives at /dashboard, which branches on this same record. -->
         <if-group show-content="{{!!socket.authToken}}">
           <template slot="content">
-                    <collection-viewer
-                      collection-type="Clinician"
-                      collection-fields="accountId"
-                      collection-view="accountView"
-                      collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
-                      collection-view-primary-fields="accountId"
-                      collection-page-size="1"
-                    >
-                      <template slot="item">
-                        <model-viewer
-                          model-type="Clinician"
-                          model-id="{{Clinician.id}}"
-                          model-fields="displayName,professionalTitle,bio,topics,country,region,city,timezone,priceAmount,consultationMinutes,listingStatus,listingNote,payoutStatus"
-                          type-alias="C"
-                        >
-                          <template slot="item">
-                            <h1>{{C.listingStatus === 'listed' ? 'Your profile dashboard' : 'Your onboarding'}}</h1>
-                            <p class="muted">{{C.listingStatus === 'listed' ? 'Your profile is live in patient search. Update any section below and the changes go out straight away.' : 'Everything below must be complete before your profile appears in patient search.'}}</p>
-
-                            <!-- Sits outside the listed/onboarding wording above, so a
-                                 suspension is surfaced whichever state it followed. -->
-                            <if-group show-content="{{C.listingStatus === 'suspended'}}">
-                              <template slot="content">
-                                <div class="err">
-                                  <strong>Your listing is suspended.</strong> Your profile is not
-                                  appearing in patient search and you cannot take new bookings.
-                                  <switch-group show-cases="why={{!!C.listingNote}},noWhy={{!C.listingNote}}">
-                                    <template slot="content" name="why">
-                                      <div style="margin-top:6px">Reason given by the reviewer: {{C.listingNote}}</div>
-                                    </template>
-                                    <template slot="content" name="noWhy">
-                                      <div style="margin-top:6px">No reason has been recorded yet.</div>
-                                    </template>
-                                    <div slot="viewport"></div>
-                                  </switch-group>
-                                </div>
-                              </template>
-                              <div slot="viewport"></div>
-                            </if-group>
-
-                            <div class="card">
-                              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px">
-                                <h2 style="margin:0">{{C.displayName}}</h2>
-                                <switch-group show-cases="draft={{C.listingStatus === 'draft'}},review={{C.listingStatus === 'pending_review'}},listed={{C.listingStatus === 'listed'}},susp={{C.listingStatus === 'suspended'}}">
-                                  <template slot="content" name="draft"><span class="pill">draft</span></template>
-                                  <template slot="content" name="review"><span class="pill pend">in review</span></template>
-                                  <template slot="content" name="listed"><span class="pill ok">listed</span></template>
-                                  <template slot="content" name="susp"><span class="pill no">suspended</span></template>
-                                  <div slot="viewport"></div>
-                                </switch-group>
-                              </div>
-                              <div class="sub">{{C.professionalTitle}}</div>
-
-                              <ul class="check">
-                                <if-group show-content="{{C.listingStatus !== 'listed'}}">
-                                  <template slot="content">
-                                    <li>
-                                      <div class="mark done">&#10003;</div>
-                                      <div class="ck-body">
-                                        <div class="t">Create your account</div>
-                                        <div class="d">Email sign-up and verification, handled by our identity provider.</div>
-                                      </div>
-                                    </li>
-                                  </template>
-                                  <div slot="viewport"></div>
-                                </if-group>
-                                <li>
-                                  <switch-group show-cases="listed={{C.listingStatus === 'listed'}},y={{C.listingStatus !== 'listed' && !!C.bio && C.bio.length >= 200 && !!C.displayName && !!C.priceAmount}},n={{C.listingStatus !== 'listed' && !(C.bio && C.bio.length >= 200 && C.displayName && C.priceAmount)}}">
-                                    <template slot="content" name="listed"><div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.4"/><path d="M5.3 19.6a6.9 6.9 0 0 1 13.4 0"/></svg></div></template>
-                                    <template slot="content" name="y"><div class="mark done">&#10003;</div></template>
-                                    <template slot="content" name="n"><div class="mark todo"></div></template>
-                                    <div slot="viewport"></div>
-                                  </switch-group>
-                                  <div class="ck-body">
-                                    <div class="t"><a href="#/clinician/profile">{{C.listingStatus === 'listed' ? 'Update your profile' : 'Complete your profile'}}</a></div>
-                                    <div class="d">Name, title, focus areas, location, fee and a biography of at least 200 characters.</div>
-                                  </div>
-                                </li>
-                                <li>
-                                  <switch-group show-cases="listed={{C.listingStatus === 'listed'}},n={{C.listingStatus !== 'listed'}}">
-                                    <template slot="content" name="listed"><div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="5"/><path d="M8.7 13.3 7.6 21l4.4-2.3 4.4 2.3-1.1-7.7"/></svg></div></template>
-                                    <template slot="content" name="n"><div class="mark todo"></div></template>
-                                    <div slot="viewport"></div>
-                                  </switch-group>
-                                  <div class="ck-body">
-                                    <div class="t"><a href="#/clinician/documents">{{C.listingStatus === 'listed' ? 'Update your documents' : 'Submit your documents'}}</a></div>
-                                    <div class="d">At least one approved qualification is required.</div>
-                                  </div>
-                                </li>
-                                <li>
-                                  <switch-group show-cases="listed={{C.listingStatus === 'listed'}},y={{C.listingStatus !== 'listed' && C.payoutStatus === 'active'}},n={{C.listingStatus !== 'listed' && C.payoutStatus !== 'active'}}">
-                                    <template slot="content" name="listed"><div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3 10h18"/></svg></div></template>
-                                    <template slot="content" name="y"><div class="mark done">&#10003;</div></template>
-                                    <template slot="content" name="n"><div class="mark todo"></div></template>
-                                    <div slot="viewport"></div>
-                                  </switch-group>
-                                  <div class="ck-body">
-                                    <div class="t"><a href="#/clinician/payouts">{{C.listingStatus === 'listed' ? 'Update payout details' : 'Add payout details'}}</a></div>
-                                    <div class="d">Status: {{C.payoutStatus}}</div>
-                                  </div>
-                                </li>
-                                <li>
-                                  <switch-group show-cases="listed={{C.listingStatus === 'listed'}},n={{C.listingStatus !== 'listed'}}">
-                                    <template slot="content" name="listed"><div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3.2v3.6M16 3.2v3.6"/></svg></div></template>
-                                    <template slot="content" name="n"><div class="mark todo"></div></template>
-                                    <div slot="viewport"></div>
-                                  </switch-group>
-                                  <div class="ck-body">
-                                    <div class="t"><a href="#/clinician/availability">{{C.listingStatus === 'listed' ? 'Update your availability' : 'Publish your availability'}}</a></div>
-                                    <div class="d">A weekly pattern the booking system turns into bookable times.</div>
-                                  </div>
-                                </li>
-                              </ul>
-                            </div>
-
-                            <div class="card">
-                              <h2>Signed in</h2>
-                              <p class="muted" style="margin:0">
-                                <model-text model-type="Account"
-                                  model-id="{{socket.authToken ? socket.authToken.accountId : ''}}"
-                                  model-field="email" default-value="(account)"></model-text>
-                              </p>
-                              <if-group show-content="{{!!socket.authToken && !!socket.authToken.groupMemberships && socket.authToken.groupMemberships.includes('620af869-cb09-4a20-bcf4-ed10510b3367')}}">
-                                <template slot="content">
-                                  <p style="margin:12px 0 0">
-                                    <a class="btn sec" href="#/admin/reviews">Document review queue</a>
-                                  </p>
-                                </template>
-                                <div slot="viewport"></div>
-                              </if-group>
-                            </div>
-
-                            <div class="card">
-                              <h2>Quick links</h2>
-                              <div class="btn-row">
-                                <a class="btn sec" href="#/clinician/profile">Profile</a>
-                                <a class="btn sec" href="#/clinician/documents">Documents</a>
-                                <a class="btn sec" href="#/clinician/availability">Availability</a>
-                                <a class="btn sec" href="#/clinician/payouts">Payouts</a>
-                                <a class="btn sec" href="#/p/{{C.id}}">Public preview</a>
-                              </div>
-                            </div>
-                          </template>
-                          <div slot="viewport"></div>
-                        </model-viewer>
+            <collection-viewer
+              collection-type="Clinician"
+              collection-fields="accountId"
+              collection-view="accountView"
+              collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
+              collection-view-primary-fields="accountId"
+              collection-page-size="1"
+            >
+              <template slot="item">
+                <h1>You are registered as a practitioner</h1>
+                <div class="card">
+                  <h2>Nothing to do here</h2>
+                  <p class="muted">Your practitioner profile already exists. Your onboarding,
+                     your hours and your bookings are all on your dashboard.</p>
+                  <div class="btn-row"><a class="btn" href="#/dashboard">Go to your dashboard</a></div>
+                </div>
+              </template>
+<template slot="no-item">
+                <h1>Your onboarding</h1>
+                <div class="card">
+                  <h2>No practitioner profile yet</h2>
+                  <p class="muted">Nothing is associated with this account. Create the profile to begin.</p>
+                  <collection-adder-form
+                    collection-type="Clinician"
+                    model-values="accountId={{socket.authToken ? socket.authToken.accountId : ''}},listingStatus=draft,priceCurrency=AUD"
+                    computable-model-values
+                    success-message="Profile created."
+                    trim-spaces
+                    show-field-errors
+                  >
+                    <div slot="message"></div>
+                    <label class="f"><span class="lab">Display name</span>
+                      <input type="text" name="displayName" placeholder="Dr Jane Smith"></label>
+                    <label class="f"><span class="lab">Professional title</span>
+                      <input type="text" name="professionalTitle" placeholder="Naturopath, BHSc"></label>
+                    <input class="btn" type="submit" value="Create profile">
+                  </collection-adder-form>
+                </div>
                       </template>
-
-                      <template slot="no-item">
-                        <h1>Your onboarding</h1>
-                        <div class="card">
-                          <h2>No practitioner profile yet</h2>
-                          <p class="muted">Nothing is associated with this account. Create the profile to begin.</p>
-                          <collection-adder-form
-                            collection-type="Clinician"
-                            model-values="accountId={{socket.authToken ? socket.authToken.accountId : ''}},listingStatus=draft,priceCurrency=AUD"
-                            computable-model-values
-                            success-message="Profile created."
-                            trim-spaces
-                            show-field-errors
-                          >
-                            <div slot="message"></div>
-                            <label class="f"><span class="lab">Display name</span>
-                              <input type="text" name="displayName" placeholder="Dr Jane Smith"></label>
-                            <label class="f"><span class="lab">Professional title</span>
-                              <input type="text" name="professionalTitle" placeholder="Naturopath, BHSc"></label>
-                            <input class="btn" type="submit" value="Create profile">
-                          </collection-adder-form>
-                        </div>
-                      </template>
-                      <template slot="loader"><div class="spin">Loading your profile…</div></template>
-                      <template slot="error"><div class="err">Could not load your profile: {{$Clinician.error.message}}</div></template>
-                      <div slot="viewport"></div>
-                    </collection-viewer>
+              <template slot="loader"><div class="spin">Loading your profile…</div></template>
+              <template slot="error"><div class="err">Could not load your profile: {{$Clinician.error.message}}</div></template>
+              <div slot="viewport"></div>
+            </collection-viewer>
           </template>
           <div slot="viewport"></div>
         </if-group>
-
       </div>
     </template>
 
@@ -2052,7 +3098,7 @@
               <h2>Not authorised</h2>
               <p class="muted">This page is for reviewers. Your account is not a member of the
                  admin group, so the platform will not release documents to you.</p>
-              <a class="btn sec" href="#/clinician">Back to your dashboard</a>
+              <a class="btn sec" href="#/dashboard">Back to your dashboard</a>
             </div>
           </template>
           <div slot="viewport"></div>
@@ -2196,10 +3242,31 @@
           <oauth-handler
             provider="keycloak:dev"
             redirect-uri="http://localhost:8100/index.html"
-            success-url="http://localhost:8100/index.html#/clinician"
+            success-url="http://localhost:8100/index.html#/dashboard"
             auth-timeout="15000"
           ></oauth-handler>
-          <p class="small muted">If you are not redirected, <a href="#/clinician">try signing in again</a>.</p>
+          <p class="small muted">If you are not redirected, <a href="#/dashboard">go to your dashboard</a>.</p>
+        </div>
+      </div>
+    </template>
+
+    <!-- A patient who signed up mid-booking comes back here instead, and is sent on
+         to the payment step rather than to a dashboard. Which of the two callbacks
+         Keycloak's redirect lands on is decided by the script near the top of this
+         file, from whether a booking is being held. -->
+    <template slot="page" route-path="/auth/callback/booking">
+      <div class="wrap">
+        <div class="card">
+          <h2>Setting up your account…</h2>
+          <p class="muted">One moment — we are taking you to the payment step.</p>
+          <oauth-handler
+            provider="keycloak:dev"
+            redirect-uri="http://localhost:8100/index.html"
+            success-url="http://localhost:8100/index.html#/booking/resume"
+            auth-timeout="15000"
+          ></oauth-handler>
+          <p class="small muted">If nothing happens, <a href="#/browse">start again from
+             the practitioner list</a>.</p>
         </div>
       </div>
     </template>
