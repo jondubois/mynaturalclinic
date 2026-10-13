@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the MyNaturalClinic schema in Saasufy. Idempotent: re-running updates in place."""
+"""Create the ConnectNatural schema in Saasufy. Idempotent: re-running updates in place."""
 import json, urllib.request, urllib.parse, sys, os
 
 KEY = open('/home/jon/Work/mynaturalclinic/.saasufy-api-key').read().strip()
@@ -438,14 +438,13 @@ views(m, [
 ])
 
 print('== TimeSlot ==')
-# accountId is comma-separated patient + clinician, as on Appointment. The spec has
-# the worker creating this row (REQ-BOOK-2), but until the worker exists the patient's
-# browser writes it from the payment success page, so the patient has to be an owner
-# too — and the clinician still needs update rights to cancel.
+# accountId is comma-separated patient + clinician, as on Appointment: the patient's
+# browser writes this row from the payment success page, so the patient has to be an
+# owner to create it at all — and the clinician still needs update rights to cancel.
 #
 # There is no unique index on (clinicianId, startAt) and there does not need to be:
-# the id is derived from that pair as a UUIDv5 (REQ-BOOK-8), so the primary key is the
-# constraint. clinicianIdStartAt below is for range scans, not for uniqueness.
+# the id is derived from that pair as a UUIDv5, so the primary key is the constraint.
+# clinicianIdStartAt below is for range scans, not for uniqueness.
 m = model('TimeSlot', 5, accessCreate='restrict', accessRead='allow',
           accessUpdate='restrict', accessDelete='restrict',
           accessEnableMultipleOwners=True, **OWNER)
@@ -644,8 +643,8 @@ views(m, [
 print('== Patient ==')
 # A person who books consultations, and the details they give us. Its existence is
 # not what makes an account a patient — every account without a Clinician record is
-# one (REQ-AUTH-4). This only holds what the patient dashboard lets them edit, and
-# is created the first time they book.
+# one. This only holds what the patient dashboard lets them edit, and is created the
+# first time they book.
 m = model('Patient', 11, accessCreate='restrict', accessRead='restrict',
           accessUpdate='restrict', accessDelete='block', **OWNER)
 fields(m, 'Patient', [

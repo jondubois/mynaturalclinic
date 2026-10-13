@@ -1,4 +1,4 @@
-# MyNaturalClinic
+# ConnectNatural
 
 A marketplace for booking online consultations with natural therapists and clinicians.
 
@@ -220,26 +220,51 @@ itself.
 
 ## From a chosen time to an appointment
 
-Everything up to **Request this time** happens anonymously. The form asks for a name and,
-optionally, what the patient would like help with — and deliberately **not** for an email
-address: Keycloak collects and verifies one on the way to payment, and asking twice only invites
-the two to disagree about who the invitation should reach.
+Everything up to **Request this time** happens anonymously. The form asks what the patient would
+like help with, and deliberately **not** for an email address: Keycloak collects and verifies one
+on the way to payment, and asking twice only invites the two to disagree about who the invitation
+should reach.
+
+The name is the same argument one step further on. A signed-in patient already has one on their
+`Patient` profile, so the field is not shown to them at all — the card states *Booking as …* and
+links to the dashboard to change it. Asking again could only produce a second answer which
+disagrees with the first, and the invitation would then name someone their own dashboard does not.
+Someone signed out, or signed in with nothing saved yet, is still asked.
+
+Reading that name needs markup, because markup is the only way to read a Saasufy record: a
+`collection-viewer` on `Patient` renders nothing and hands the answer to a function, which hides
+the field or restores it. Being a live binding rather than a one-off read, renaming yourself on the
+dashboard in another tab updates the booking form in this one.
 
 The button is therefore where the account is asked for, and not before — browsing, picking a time
 and saying what you need all happen without one:
 
 | | |
 | --- | --- |
-| **1 · Request this time** | The selection is written to `sessionStorage` and, if the patient is already signed in, the page goes straight to step 3 |
+| **1 · Request this time** | The selection is written to `localStorage` and, if the patient is already signed in, the page goes straight to step 3 |
 | **2 · Log in or register** | Two `oauth-link`s revealed under the form, the same pair as clinician onboarding, the register one carrying `&prompt=create` |
 | **3 · `#/booking/payment/:clinicianId`** | What it costs and who for, and a link out to `PIN_PAYMENTS_URL` |
 | **4 · `#/booking/confirmed/:clinicianId`** | Writes the `TimeSlot` and the `Appointment`, and calls the `appointmentInvite` cloud function |
 
-**The selection has to survive leaving the origin.** Keycloak redirects to the bare page URL, so
-the round trip is a fresh page load and no component state outlives it; `sessionStorage` does,
-within the tab. Two keys, and never both: `mnc.pendingBooking` while the appointment is only
-intended, `mnc.bookedAppointment` once it exists. Making a new hold drops any receipt — otherwise
-booking the same practitioner twice in a visit reads as already paid.
+**The selection has to survive leaving the origin, and also leaving the tab.** Keycloak redirects
+to the bare page URL, so the round trip is a fresh page load and no component state outlives it.
+`sessionStorage` outlives that much — but **signing up is not one tab**: Keycloak's registration
+ends on a "verify your email" page, the link in that email opens a new tab, and the flow completes
+*there*. A per-tab hold is therefore invisible exactly when a first-time patient needs it, while
+logging in, which never leaves the tab, works perfectly. `oauth-link` and `oauth-handler` keep
+their own OAuth state in `localStorage` for this reason, which is why the sign-up itself succeeded
+and only the booking was lost.
+
+So the hold is in `localStorage` too. Two keys, and never both: `mnc.pendingBooking` while the
+appointment is only intended, `mnc.bookedAppointment` once it exists. Making a new hold drops any
+receipt — otherwise booking the same practitioner twice reads as already paid.
+
+Persisting it means it has to expire, or an abandoned booking resurfaces days later offering to
+charge for a consultation that has already been and gone. A hold is dropped once it is 12 hours
+old — comfortably longer than finding an email in a spam folder — or as soon as its slot is in the
+past. And because no storage reaches a *different device*, the patient dashboard shows a **You
+have a booking waiting** card whenever a hold exists, which recovers the booking from whichever
+device is holding it.
 
 **The OAuth callback needs two landing pages**, because `oauth-handler`'s `success-url` is a fixed
 attribute and cannot name the clinician the patient was booking. So `/auth/callback` lands on the

@@ -4,10 +4,10 @@
 The browser socket is unauthenticated until Keycloak is wired up, so Saasufy
 refuses every write and every read of a `restrict` model. This flips the three
 onboarding collections to `allow` so the clinician flow can actually be
-exercised in a browser, and restores the specification's rules afterwards.
+exercised in a browser, and puts the real rules back afterwards.
 
     ./dev-access.py open      # development only
-    ./dev-access.py restore   # back to the rules in requirements.md
+    ./dev-access.py restore   # back to the real rules
 
 Never leave a service in `open` state once it holds real data.
 """
@@ -46,7 +46,7 @@ def models():
 OPEN = {'accessCreate': 'allow', 'accessRead': 'allow',
         'accessUpdate': 'allow', 'accessDelete': 'allow'}
 
-SPEC = {
+REAL = {
     'Clinician':    {'accessCreate': 'restrict', 'accessRead': 'allow',
                      'accessUpdate': 'restrict', 'accessDelete': 'block'},
     'Document':     {'accessCreate': 'restrict', 'accessRead': 'allow',
@@ -61,9 +61,9 @@ if mode not in ('open', 'restore'):
     raise SystemExit(1)
 
 mm = models()
-for name in SPEC:
-    call('PUT', f'Model/{mm[name]}', OPEN if mode == 'open' else SPEC[name])
-    print(f'  {name}: {"OPEN (dev)" if mode == "open" else "restored to spec"}')
+for name in REAL:
+    call('PUT', f'Model/{mm[name]}', OPEN if mode == 'open' else REAL[name])
+    print(f'  {name}: {"OPEN (dev)" if mode == "open" else "restored"}')
 call('POST', 'service/start')
 print('deployed.')
 if mode == 'open':

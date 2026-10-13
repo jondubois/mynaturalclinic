@@ -62,11 +62,10 @@ def function(name, code, **opts):
 # ---------------------------------------------------------------------------
 # appointmentInvite
 #
-# Called by the booking success page once the Appointment row exists. It is what
-# will eventually send the clinician their invitation (§6.6, REQ-INV-1) and the
-# patient their receipt; for now it only logs what it would send, so the shape of
-# the call and its access control can be settled before an email provider is wired
-# in.
+# Called by the booking success page once the Appointment row exists. It is what will
+# eventually send the clinician their invitation and the patient their receipt; for now
+# it only logs what it would send, so the shape of the call and its access control can
+# be settled before an email provider is wired in.
 #
 # The hook is unauthenticated and `crud` runs as the account admin, so the caller's
 # JWT is verified first and every read is scoped to the appointment that token's
@@ -107,8 +106,8 @@ let [clinician, patientAccount, clinicianAccount] = await Promise.all([
   crud.read({ type: 'Account', id: appointment.clinicianAccountId })
 ]);
 
-// Stands in for the Email queue row and the provider call (REQ-INV-1). The patient's
-// address comes from the Keycloak-verified Account, never from the booking form.
+// Stands in for the Email queue row and the provider call. The patient's address
+// comes from the Keycloak-verified Account, never from the booking form.
 console.log('would send appointment invite', JSON.stringify({
   appointmentId,
   template: 'clinician-invite',

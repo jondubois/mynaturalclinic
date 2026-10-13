@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MyNaturalClinic</title>
+<title>ConnectNatural</title>
 
 <!-- Saasufy components -->
 <script src="https://saasufy.com/node_modules/saasufy-components/socket.js" type="module" defer></script>
@@ -26,6 +26,12 @@
 <script src="https://saasufy.com/node_modules/saasufy-components/log-out.js" type="module" defer></script>
 
 <style>
+  /* The `hidden` attribute is only `display:none` in the UA stylesheet, which means
+     any author rule setting `display` on the same element beats it — `label.f` is
+     `display:block`, so hiding a field by setting `hidden` silently did nothing. One
+     rule here rather than a `[hidden]` variant beside every such selector. */
+  [hidden]{display:none !important}
+
   :root{
     --bg:#fbfaf8; --surface:#fff; --text:#23282e; --muted:#6f7680;
     --border:#e6e3de; --accent:#2f6b4f; --accent-soft:#eef4f0;
@@ -138,6 +144,8 @@
 
   oauth-link,log-out{display:inline-block}
   oauth-link > [slot=viewport]{display:inline-block}
+  /* A switch-group standing in for a single button has to lay out like one. */
+  .btn-row > switch-group,.btn-row > switch-group > [slot=viewport]{display:inline-block}
   .btn-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
   .btn-row > *{margin:0}
 
@@ -193,6 +201,10 @@
     padding:10px 12px;font-size:.86rem;margin-bottom:12px}
   .note{background:var(--accent-soft);border:1px solid #cfe2d6;border-radius:8px;
     padding:12px 14px;font-size:.87rem;margin-bottom:14px}
+  /* Both carry a bottom margin and no top, which works where they follow a paragraph
+     and not where they follow a button row — .btn-row has no bottom margin of its own,
+     so the two ended up touching. */
+  .btn-row + .note,.btn-row + .err{margin-top:14px}
   .spin{text-align:center;color:var(--muted);padding:22px;font-size:.9rem}
 
   /* ---- confirm-modal ----------------------------------------------------
@@ -300,6 +312,9 @@
   .request-msg{margin:14px 0 0}
   .request-msg:empty{display:none}
   .booking-auth{border-top:1px solid var(--border);margin-top:4px}
+  .booking-as{margin:0 0 16px}
+  /* The .hint rule is scoped to label.f, so this one carries its own styling. */
+  .booking-as .hint{font-size:.78rem;color:var(--muted);margin-left:4px}
   .pay-total{font-size:1.9rem;font-weight:700;margin:14px 0 2px}
   .booking-done{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;
     justify-content:center;background:var(--accent-soft);color:var(--accent);
@@ -313,33 +328,64 @@
 </head>
 <body>
 
-<!-- The booking a patient picked while anonymous. It has to survive the Keycloak
-     round trip, which leaves the origin and comes back as a fresh page load, so it
-     lives in sessionStorage (REQ-PAT-2) rather than in a component's state. Defined
-     before the callback routing below, which reads it to decide where to land. -->
+<!-- The booking a patient picked while anonymous. It has to survive the Keycloak round
+     trip, which leaves the origin and comes back as a fresh page load, so it cannot live
+     in a component's state.
+
+     localStorage, not sessionStorage, and the difference is the whole of a bug: signing
+     up is not one tab. Keycloak's registration ends on a "verify your email" page, the
+     link in that email opens a NEW tab, and the flow completes there — so a per-tab hold
+     is invisible exactly when a first-time patient needs it, while logging in, which
+     never leaves the tab, works fine. The oauth-link and oauth-handler components keep
+     their own OAuth state in localStorage for the same reason, which is why the sign-up
+     itself succeeded and only the booking was lost.
+
+     Persisting it instead means it must expire, or an abandoned booking resurfaces days
+     later. Defined before the callback routing below, which reads it to decide where to
+     land. -->
 <script>
   (function () {
-    var HELD = 'mnc.pendingBooking';     // the selection, until the Appointment exists
+    var HELD = 'mnc.pendingBooking';      // the selection, until the Appointment exists
     var BOOKED = 'mnc.bookedAppointment'; // the Appointment, so a reload cannot re-create it
+    // Long enough for a registration email to be found and clicked, including one that
+    // lands in a spam folder; short enough that it is still the booking the patient
+    // remembers making.
+    var HOLD_TTL_MS = 12 * 3600 * 1000;
 
     function read(key) {
-      try { return JSON.parse(sessionStorage.getItem(key)) || null; } catch (e) { return null; }
+      try {
+        var value = JSON.parse(localStorage.getItem(key));
+        if (!value) return null;
+        // A hold whose slot has been and gone is worse than no hold: it would offer a
+        // payment page for a consultation which cannot happen.
+        if (value.heldAt && Date.now() - value.heldAt > HOLD_TTL_MS) return clear(key);
+        if (value.startAt && value.startAt <= Date.now()) return clear(key);
+        return value;
+      } catch (e) { return null; }
     }
+    function clear(key) { write(key, null); return null; }
     function write(key, value) {
       try {
-        if (value) sessionStorage.setItem(key, JSON.stringify(value));
-        else sessionStorage.removeItem(key);
-      } catch (e) { /* private browsing; the flow degrades to one page */ }
+        if (value) localStorage.setItem(key, JSON.stringify(value));
+        else localStorage.removeItem(key);
+      } catch (e) { /* storage blocked; the flow degrades to one page */ }
+    }
+
+    function stamp(value) {
+      var copy = {};
+      for (var k in value) if (Object.prototype.hasOwnProperty.call(value, k)) copy[k] = value[k];
+      copy.heldAt = Date.now();
+      return copy;
     }
 
     window.heldBooking = function () { return read(HELD); };
     window.bookedAppointment = function () { return read(BOOKED); };
     // Exactly one of the two is ever set. A new hold drops the last receipt, or
-    // booking the same practitioner twice in a visit would read as already paid; and
-    // the hold becomes the receipt in one step once the Appointment exists.
-    window.holdBooking = function (booking) { write(BOOKED, null); write(HELD, booking); };
+    // booking the same practitioner twice would read as already paid; and the hold
+    // becomes the receipt in one step once the Appointment exists.
+    window.holdBooking = function (booking) { write(BOOKED, null); write(HELD, stamp(booking)); };
     window.bookingConfirmed = function (appointment) {
-      write(BOOKED, appointment);
+      write(BOOKED, stamp(appointment));
       write(HELD, null);
     };
   })();
@@ -557,16 +603,13 @@
   })();
 </script>
 <script>
-  // The companion worker. Nothing calls it yet: the appointment request went through
-  // POST /appointments/request (REQ-ARCH-12) while the patient was anonymous, and now
-  // signs them in first and writes the Appointment from the browser instead. The
-  // constant stays because every side effect still to come — the real charge, the
-  // refund, the Zoom meeting, the invite email — belongs there.
-  // Rewritten to the production origin on deploy, via `rewrites` in config.json.
-  window.WORKER_BASE_URL = 'http://localhost:8200';
+  // Our public origin. Nothing fetches from it yet; it is the base for links which
+  // have to work outside the app — a meeting link, an invitation — and is rewritten to
+  // the production origin on deploy, via `rewrites` in config.json.
+  window.PUBLIC_BASE_URL = 'http://localhost:8200';
 
   // Where a patient is sent to pay. A hosted Pin Payments page stands in until the
-  // Pin.js checkout of REQ-BOOK-0 exists. Nothing redirects back from it yet, so the
+  // Pin.js hosted-field checkout exists. Nothing redirects back from it yet, so the
   // payment page also carries a link onwards to the success page.
   window.PIN_PAYMENTS_URL = 'https://pay.pinpayments.com/s43s/test';
 
@@ -574,7 +617,8 @@
   // both environments and deploy.py has nothing to rewrite here.
   window.SAASUFY_FUNCTIONS_URL = 'https://saasufy.com/sid8016/functions';
 
-  window.PLATFORM_FEE_RATE = 0.15;   // REQ-BOOK-4
+  // Our share of each booking. The patient is shown one number, inclusive of it.
+  window.PLATFORM_FEE_RATE = 0.15;
 </script>
 
 <!-- Booking calendar — a week of the clinician's open times, read back in the
@@ -589,8 +633,8 @@
                      'Friday', 'Saturday'];
     var DAY_MS = 86400000;
     var SPAN = 7;                    // days per view
-    var HORIZON_DAYS = 60;           // REQ-AVAIL-2
-    var LEAD_MS = 2 * 3600 * 1000;   // REQ-AVAIL-4
+    var HORIZON_DAYS = 60;           // how far ahead a time can be booked
+    var LEAD_MS = 2 * 3600 * 1000;   // and how soon, from now
 
     // Outside the DOM: the reducer re-renders its viewport on every change, which would
     // otherwise drop the selection mid-booking. Keyed on the reducer element, since a
@@ -791,6 +835,31 @@
       return page && page.querySelector('.booking-request');
     }
 
+    // Whose name goes on the invitation. A signed-in patient's comes from their
+    // profile, in which case the field is not shown at all; anyone else is asked.
+    function syncName(card) {
+      if (!card) return;
+      var known = card.dataset.knownName || '';
+      var field = card.querySelector('.name-field');
+      var as = card.querySelector('.booking-as');
+      var name = card.querySelector('.booking-as-name');
+      if (field) field.hidden = !!known;
+      if (as) as.hidden = !known;
+      if (name) name.textContent = known;
+    }
+
+    // Called from the probe's own template, so it re-runs if the patient renames
+    // themselves on their dashboard while this page is open.
+    window.bookingName = function (fullName) {
+      var card = this && this.closest ? this.closest('.booking-request') : null;
+      if (!card) return '';
+      var name = String(fullName == null ? '' : fullName).trim();
+      if (name) card.dataset.knownName = name;
+      else delete card.dataset.knownName;
+      syncName(card);
+      return '';
+    };
+
     function syncRequest(home, slot) {
       var card = requestCard(home);
       if (!card) return;
@@ -813,6 +882,7 @@
       card.querySelector('.request-btn').disabled = false;
       var auth = card.querySelector('.booking-auth');
       if (auth) auth.hidden = true;
+      syncName(card);
     }
 
     function draw(source) {
@@ -847,7 +917,7 @@
     }
 
     // No email field: Keycloak has a verified address already, and asking twice
-    // invites a mismatch between who pays and who the invitation reaches (REQ-PAT-4).
+    // invites a mismatch between who pays and who the invitation reaches.
     function sendRequest(button) {
       var card = button.closest('.booking-request');
       var slot = card.bookingSlot;
@@ -857,7 +927,8 @@
         return input ? input.value.trim() : '';
       };
       if (!slot) return;
-      if (!field('patientName')) {
+      var patientName = card.dataset.knownName || field('patientName');
+      if (!patientName) {
         message.className = 'request-msg err';
         message.textContent = 'Your name is needed — the invitation names you.';
         return;
@@ -876,7 +947,7 @@
         clinicianId: card.dataset.clinicianId,
         startAt: slot.startAt,
         endAt: slot.endAt,
-        patientName: field('patientName'),
+        patientName: patientName,
         patientTimezone: window.viewerTimeZone(),
         intakeReason: field('intakeReason')
       });
@@ -935,6 +1006,14 @@
       return s && s.authToken ? s.authToken.accountId : null;
     };
 
+    // Saasufy withholds a change notification from the socket which caused it — an
+    // anti-self-delivery optimisation, on the assumption that a client already knows
+    // what it just did. A component does not: the clinician's own dashboard is bound to
+    // the same view as everyone else's and had no idea its own write had happened, so
+    // the buttons stayed up until a reload. Any publisherId turns the suppression off
+    // for that call, so every write this app makes carries one.
+    var PUBLISHER = 'mnc-app';
+
     // Polled rather than driven off the authStateChange stream: these pages are
     // reached by a full page load straight after the Keycloak redirect, so the socket
     // may not exist yet either, and there is nothing to listen on.
@@ -958,13 +1037,13 @@
     }
 
     // A TimeSlot's id is *derived* from (clinicianId, startAt) rather than random, so
-    // the primary key is the booking's uniqueness constraint (REQ-AVAIL-3). Two
-    // patients racing for the same instant compute the same id, both try to create it,
-    // and the database lets exactly one through — which is the serialisation REQ-BOOK-2
-    // wants and the reason this flow is safe without a single-writer worker.
+    // the primary key is the booking's uniqueness constraint. Two patients racing for
+    // the same instant compute the same id, both try to create it, and the database lets
+    // exactly one through — which is the serialisation a single writer would otherwise
+    // have to provide, and the reason this flow is safe without one.
     //
-    // Anything else which creates a slot — the worker, a migration — must derive the id
-    // the same way or the constraint is silently lost. The namespace and the name are
+    // Anything else which creates a slot — a cloud function, a migration — must derive
+    // the id the same way or the constraint is silently lost. The namespace and name are
     // therefore a protocol, not an implementation detail: name is exactly
     // `<clinicianId>:<startAt>`, startAt in epoch milliseconds with no padding.
     var SLOT_NAMESPACE = '6f8c1e5a-3b47-4d2e-9a10-5c7e2d9f4b83';
@@ -1063,16 +1142,16 @@
         '<p class="muted small">' + esc(clinician.consultationMinutes) +
         ' minutes online, booked for ' + esc(held.patientName) + '.</p>' +
         '<div class="pay-total">' + money(amount) + ' AUD</div>' +
-        '<p class="muted small">One payment, inclusive of our fee (REQ-BOOK-7). We hold it ' +
+        '<p class="muted small">One payment, inclusive of our fee. We hold it ' +
         'and pass it on to ' + esc(clinician.displayName) +
         ' only after the consultation has taken place.</p>' +
         '<div class="btn-row"><a class="btn" href="' + esc(window.PIN_PAYMENTS_URL) +
         '" target="_blank" rel="noopener">Pay ' + money(amount) + ' with Pin Payments</a></div>' +
         '<div class="note"><strong>The checkout is a stand-in.</strong> That link opens a ' +
         'hosted Pin Payments page which knows nothing about this booking and will not send ' +
-        'you back here. The Pin.js card form of REQ-BOOK-0 and the webhook which confirms ' +
-        'the charge (REQ-BOOK-6) are not built yet, so follow the link below once you are ' +
-        'done to see what happens after a real payment.</div>' +
+        'you back here. The card form and the webhook which confirms the charge are not ' +
+        'built yet, so follow the link below once you are done to see what happens after ' +
+        'a real payment.</div>' +
         '<p class="small"><a href="#/booking/confirmed/' + esc(clinician.id) +
         '">I have completed payment &rarr;</a></p>' +
         '</div>';
@@ -1082,7 +1161,7 @@
 
     // Writing happens on render, so a re-render — a field change on the clinician
     // record is enough — must not write twice. The flag covers the span before the
-    // receipt lands in sessionStorage, which covers everything after it.
+    // receipt lands in storage, which covers everything after it.
     var creating = null;
     var inFlight = null;   // the clinician record a retry would use
 
@@ -1105,7 +1184,8 @@
     // decide whether to write. A read-then-create would reopen the very window the
     // derived id closes.
     function claimSlot(s, accountId, slot) {
-      return s.invoke('crud', { action: 'create', type: 'TimeSlot', value: slot })
+      return s.invoke('crud', { action: 'create', type: 'TimeSlot', value: slot,
+        publisherId: PUBLISHER })
         .then(function () {
           return { created: true, appointmentId: slot.appointmentId };
         })
@@ -1114,10 +1194,10 @@
             .then(function (existing) {
               if (!existing) throw error;   // a real failure, not a collision
               // Status before ownership. A row released back to 'open' by a
-              // cancellation or decline (REQ-INV-4) survives, and nothing here may
+              // cancellation or decline survives, and nothing here may
               // turn it into a booking again: another patient does not own it, and
               // reviving our own would confirm the cancelled appointment it still
-              // names. The worker owns that transition (REQ-BOOK-8).
+              // names. Reviving a released slot needs a single writer this is not.
               if (existing.status !== 'held' && existing.status !== 'booked') {
                 throw patientError('that time was released by an earlier booking and ' +
                   'cannot be re-booked here yet. Nothing has been charged.');
@@ -1150,8 +1230,8 @@
             patientAccountId: accountId, clinicianAccountId: clinician.accountId,
             clinicianId: clinician.id, timeSlotId: slotId,
             startAt: held.startAt, endAt: held.endAt,
-            // Not 'paid': the Pin webhook is the only authority on that (REQ-BOOK-6)
-            // and it is not wired up, so paymentStatus stays 'none' and the
+            // Not 'paid': the Pin webhook is the only authority on that and it is
+            // not wired up, so paymentStatus stays 'none' and the
             // clinician's invitation is what moves next.
             status: 'pending_clinician',
             patientName: held.patientName,
@@ -1176,7 +1256,8 @@
           }).then(function (claim) {
             var id = claim.appointmentId || appointmentId;
             return s.invoke('crud', {
-              action: 'create', type: 'Appointment', value: appointmentValue(id, slotId)
+              action: 'create', type: 'Appointment', value: appointmentValue(id, slotId),
+              publisherId: PUBLISHER
             }).catch(function (error) {
               // It may have landed and only the answer been lost, which a second
               // attempt would otherwise read as a fresh failure.
@@ -1190,7 +1271,7 @@
               // An older row with no appointmentId — point it at the one just written.
               return s.invoke('crud', {
                 action: 'update', type: 'TimeSlot', id: slotId,
-                field: 'appointmentId', value: id
+                field: 'appointmentId', value: id, publisherId: PUBLISHER
               }).catch(function () {}).then(function () { return id; });
             });
           });
@@ -1243,12 +1324,13 @@
           value: {
             accountId: accountId,
             fullName: held.patientName, timezone: held.patientTimezone
-          }
+          },
+          publisherId: PUBLISHER
         });
       }).catch(function () {});
     }
 
-    // The invite email (§6.6) will be sent from here. The cloud function only logs
+    // The invite email will be sent from here. The cloud function only logs
     // for now; it verifies this token and refuses an appointment the caller does not
     // own, so a failure here is worth surfacing.
     function sendInvite(s, appointmentId) {
@@ -1308,11 +1390,26 @@
       createAppointment(held, inFlight);
     });
 
+    // A booking which was held but never paid for, surfaced on the dashboard. The
+    // hold already survives the sign-up round trip, but it cannot survive finishing
+    // registration on a different device from the one that started it — and this is
+    // the recovery for that, and for anyone who simply wandered off mid-booking.
+    window.pendingBookingNotice = function () {
+      var held = window.heldBooking();
+      if (!held) return '';
+      return '<div class="card"><h2>You have a booking waiting</h2>' +
+        '<p class="muted">' + esc(window.slotLabel(held.startAt, held.endAt)) +
+        ' (' + esc(window.viewerTimeZone()) + '), for ' + esc(held.patientName) +
+        '. It is not booked until the payment is done.</p>' +
+        '<div class="btn-row"><a class="btn" href="#/booking/payment/' +
+        esc(held.clinicianId) + '">Finish this booking</a></div></div>';
+    };
+
     // ------------------------------------------------- accept and decline
 
-    // REQ-INV-2's dashboard half. The clinician is an owner of both rows, so both
-    // writes are theirs to make and no server-side code is needed for the decision
-    // itself — only for the consequences, which is why the refund is not here.
+    // Answering an invitation, from the dashboard. The clinician is an owner of both
+    // rows, so both writes are theirs to make and no server-side code is needed for the
+    // decision itself — only for its consequences, which is why the refund is not here.
     function apptRow(node) { return node.closest('.appt-row'); }
 
     function apptMessage(row, text, className) {
@@ -1348,7 +1445,8 @@
           }
           var value = { status: decision, inviteRespondedAt: Date.now() };
           if (decision === 'declined') value.declineReason = reason || '';
-          return s.invoke('crud', { action: 'update', type: 'Appointment', id: id, value: value });
+          return s.invoke('crud', { action: 'update', type: 'Appointment', id: id,
+            value: value, publisherId: PUBLISHER });
         })
         .then(function () {
           // Status first, slot second, and never the other way round: freeing the time
@@ -1358,12 +1456,8 @@
           return releaseSlot(s, row);
         })
         .then(function () {
-          if (decision === 'confirmed') {
-            return apptMessage(row, 'Accepted. The patient can see it now; the meeting ' +
-              'link follows once video is wired up.', 'muted small');
-          }
-          apptMessage(row, 'Declined, and the time is open for booking again. The refund ' +
-            'is not automatic yet — it still has to be issued in Pin.', 'note');
+          // Short, because the row is about to re-render with the outcome on it.
+          apptMessage(row, decision === 'confirmed' ? 'Accepted.' : 'Declined.', 'muted small');
         })
         .catch(function (error) {
           setBusy(row, false);
@@ -1379,7 +1473,8 @@
     function releaseSlot(s, row) {
       var slotId = row.dataset.timeSlotId;
       if (!slotId) return null;
-      return s.invoke('crud', { action: 'delete', type: 'TimeSlot', id: slotId })
+      return s.invoke('crud', { action: 'delete', type: 'TimeSlot', id: slotId,
+        publisherId: PUBLISHER })
         .catch(function () {
           // The decline stands either way; this only leaves a time still showing as
           // taken, which is visible and fixable, so it must not fail the decline.
@@ -1437,8 +1532,8 @@
         ',query=' + (query || '');
     };
 
-    // Every state of §6.5 named explicitly, so a status nobody thought about shows up
-    // as itself rather than as a blank.
+    // Every status the schema allows, named explicitly, so one nobody thought about
+    // shows up as itself rather than as a blank.
     var STATES = {
       pending_payment:     ['pend', 'awaiting payment'],
       pending_clinician:   ['pend', 'awaiting the practitioner'],
@@ -1478,7 +1573,7 @@
 
   <header class="site">
     <div class="wrap">
-      <a class="brand" href="#/">My<span>Natural</span>Clinic</a>
+      <a class="brand" href="#/">Connect<span>Natural</span></a>
       <nav class="main">
         <a href="#/">Home</a>
         <a href="#/browse">Browse</a>
@@ -1553,9 +1648,41 @@
           <p>Search practitioners by what you need help with, where they are, and when
              they are actually free — then book and meet online.</p>
           <div class="btn-row" style="margin-top:20px">
-            <a class="btn" href="#/clinician">Join as a practitioner</a>
+            <!-- Joining is offered but never required: a patient can search, browse and
+                 pick a time without an account, and is only asked for one at the point
+                 of paying. This is for someone who would rather sign up first, and goes
+                 straight to Keycloak's registration form — the callback then lands them
+                 on their own dashboard. Signed in already, it would be a button to
+                 nowhere, so it becomes the way back to that dashboard instead. -->
+            <!-- One switch-group rather than two if-groups: both would be flex items
+                 of the button row, and the empty one would still draw its gap. -->
+            <switch-group show-cases="anon={{!socket.authToken}},authed={{!!socket.authToken}}">
+              <template slot="content" name="anon">
+                <oauth-link
+                  provider="keycloak:dev"
+                  client-id="saasufy-0eabf8a1-d86a-473e-a20d-4ca9ecfb8069-dev"
+                  redirect-uri="http://localhost:8100/index.html"
+                  grant-type="authorization_code"
+                >
+                  <template slot="item">
+                    <a class="btn" href="https://auth.saasufy.com/realms/tenant/protocol/openid-connect/auth?client_id={{oauth.clientId}}&amp;state={{oauth.state}}&amp;response_type=code&amp;scope=openid&amp;redirect_uri={{oauth.redirectURI}}&amp;prompt=create">Join as a patient</a>
+                  </template>
+                  <div slot="viewport"></div>
+                </oauth-link>
+              </template>
+              <template slot="content" name="authed">
+                <a class="btn" href="#/dashboard">Your dashboard</a>
+              </template>
+              <div slot="viewport"></div>
+            </switch-group>
+
             <a class="btn sec" href="#/browse">Browse practitioners</a>
           </div>
+          <!-- Out of the button row and deliberately quiet: the hero speaks to patients,
+               and practitioners are a small, deliberate minority of the people reading
+               it. The onboarding behind this link is long on purpose. -->
+          <p class="small muted" style="margin-top:14px">Are you a practitioner?
+            <a href="#/clinician">Join as a practitioner</a>.</p>
         </div>
 
         <div class="card">
@@ -1907,9 +2034,39 @@
               <p class="chosen"></p>
               <p class="chosen-sub"></p>
               <!-- No email field. Keycloak collects and verifies the address on the way
-                   to payment, and it is the one the invitation and the receipt use
-                   (REQ-PAT-4); asking here as well only invites the two to disagree. -->
-              <label class="f"><span class="lab">Your name</span>
+                   to payment, and it is the one the invitation and the receipt use;
+                   asking here as well only invites the two to disagree.
+
+                   The name is the same argument one step further on. A signed-in patient
+                   has one on their own profile, so asking again can only produce a second
+                   answer which disagrees with the first — and the invitation would then
+                   name someone their dashboard does not. The probe below renders nothing;
+                   markup is simply the only way to read a Saasufy record, and it calls
+                   bookingName with the answer whenever that answer changes. A patient who
+                   is signed out, or signed in with nothing saved yet, is still asked. -->
+              <if-group show-content="{{!!socket.authToken}}">
+                <template slot="content">
+                  <collection-viewer
+                    collection-type="Patient"
+                    collection-fields="fullName"
+                    collection-view="accountView"
+                    collection-view-params="accountId={{socket.authToken ? socket.authToken.accountId : ''}}"
+                    collection-view-primary-fields="accountId"
+                    collection-page-size="1"
+                  >
+                    <template slot="item">{{{bookingName.call(this, Patient.fullName)}}}</template>
+                    <template slot="no-item">{{{bookingName.call(this, '')}}}</template>
+                    <template slot="error">{{{bookingName.call(this, '')}}}</template>
+                    <div slot="viewport"></div>
+                  </collection-viewer>
+                </template>
+                <div slot="viewport"></div>
+              </if-group>
+
+              <p class="booking-as" hidden>Booking as <strong class="booking-as-name"></strong>.
+                <span class="hint">Change it on <a href="#/dashboard">your dashboard</a>.</span></p>
+
+              <label class="f name-field"><span class="lab">Your name</span>
                 <input type="text" name="patientName" placeholder="Alex Moore">
                 <span class="hint">{{Clinician.displayName}} sees this on the invitation.</span></label>
               <label class="f"><span class="lab">What would you like help with?</span>
@@ -1924,8 +2081,9 @@
 
               <!-- Revealed by the button rather than shown up front: the account is the
                    last thing asked for, after the time and the reason are settled
-                   (REQ-PAT-1, REQ-PAT-3). The choice is held in sessionStorage, so the
-                   Keycloak round trip comes back to the payment step with it intact. -->
+                   The choice is held in localStorage, so the Keycloak round trip comes
+                   back to the payment step with it intact — including the sign-up round
+                   trip, which finishes in a different tab. -->
               <div class="booking-auth" hidden>
                 <h3 style="margin:18px 0 2px">One last step</h3>
                 <p class="muted small">We need an account to take the payment and to send
@@ -1970,7 +2128,7 @@
     </template>
 
     <!-- ===================== PAYMENT AND CONFIRMATION =====================
-         Both pages render from the held booking, which lives in sessionStorage, but
+         Both pages render from the held booking, which lives in localStorage, but
          wrap it in a model-viewer on the clinician: the practitioner's name, title,
          price and timezone are read live rather than trusted from the hold.
 
@@ -2002,9 +2160,9 @@
       </div>
     </template>
 
-    <!-- Where Pin's redirect will land once the checkout of REQ-BOOK-0 exists. The
-         Appointment row is written here, by the patient's own browser, because the
-         worker which should own it (REQ-ARCH-12) is not built yet. -->
+    <!-- Where Pin's redirect will land once the hosted-field checkout exists. The
+         Appointment row is written here, by the patient's own browser, because there is
+         no server-side code in the booking path to write it instead. -->
     <template slot="page" route-path="/booking/confirmed/:clinicianId" no-auth-redirect="/browse" auto-reset-window-scroll>
       <div class="wrap">
         <model-viewer
@@ -2025,7 +2183,7 @@
     <!-- ============================== DASHBOARD ==============================
          One route, two dashboards. Which one you get is decided by whether a
          Clinician record exists for the signed-in account — that is the whole of
-         what makes an account a practitioner (REQ-AUTH-4), so the role test is the
+         what makes an account a practitioner, so the role test is the
          collection-viewer's own item/no-item branch and nothing is stored on the
          account to be kept in step. The two share only what is genuinely the same
          for both: your own details, and who you are signed in as. -->
@@ -2241,13 +2399,33 @@
                                 <div slot="viewport"></div>
                               </if-group>
 
-                              <if-group show-content="{{Appt.status === 'declined' && !!Appt.declineReason}}">
+                              <if-group show-content="{{Appt.status === 'confirmed'}}">
                                 <template slot="content">
-                                  <div class="d">You gave the reason: {{Appt.declineReason}}</div>
+                                  <div class="d">The patient can see this. The meeting link
+                                    follows once video is connected.</div>
                                 </template>
                                 <div slot="viewport"></div>
                               </if-group>
 
+                              <if-group show-content="{{Appt.status === 'declined'}}">
+                                <template slot="content">
+                                  <div class="d">The time has been reopened for booking.
+                                    The refund is not automatic yet — it still has to be
+                                    issued in Pin.</div>
+                                  <if-group show-content="{{!!Appt.declineReason}}">
+                                    <template slot="content">
+                                      <div class="d">You gave the reason: {{Appt.declineReason}}</div>
+                                    </template>
+                                    <div slot="viewport"></div>
+                                  </if-group>
+                                </template>
+                                <div slot="viewport"></div>
+                              </if-group>
+
+                              <!-- Progress and errors only. Anything which is true of the
+                                   appointment afterwards is rendered from its status
+                                   above, because answering re-renders this row and would
+                                   wipe a message put here by the click. -->
                               <div class="appt-msg"></div>
                             </div>
                             <div style="text-align:right">
@@ -2300,6 +2478,8 @@
                 <h1>Your appointments</h1>
                 <p class="muted">Everything you have booked, and the details a
                    practitioner sees when you do.</p>
+
+                {{{pendingBookingNotice()}}}
 
                 <div class="card">
                   <div class="sechead"><h2>Coming up</h2></div>
